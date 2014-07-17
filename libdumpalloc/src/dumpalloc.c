@@ -151,26 +151,26 @@ static void open_socket(char* server_host_port) {
 	dump_fd = sockfd;
 }
 
-static int write_uint32(buffered_writer* writer, uint32_t i) {
+static int write_uint32(buffered_writer* writer, const uint32_t i) {
 
 	const uint32_t le = htole32(i);
 
 	return writer->write(writer, &le, sizeof(le));
 }
 
-static int write_int32(buffered_writer* writer, int32_t i) {
+static int write_int32(buffered_writer* writer, const int32_t i) {
 
 	return write_uint32(writer, i);
 }
 
-static int write_uint64(buffered_writer* writer, uint64_t i) {
+static int write_uint64(buffered_writer* writer, const uint64_t i) {
 
-	const uint64_t le = htole64((uint64_t)i);
+	const uint64_t le = htole64(i);
 
 	return writer->write(writer, &le, sizeof(le));
 }
 
-static int write_addr(buffered_writer* writer, void* addr) {
+static int write_addr(buffered_writer* writer, const void* addr) {
 
 	return write_uint64(writer, (uint64_t)addr);
 }
