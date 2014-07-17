@@ -60,6 +60,10 @@ static int get_prev_sp_and_ra(void** prev_sp, void** prev_ra, void* curr_sp, voi
 
 	while (sp_offset >= 0 && p > (uint32_t*)scan_end) {
 
+		if ((unsigned long)p % 4) {
+			fprintf(stderr, "**** Oh-oh. Mis-aligned ip: 0x%x looks like we've wandered out of code section.\n", (unsigned long)p);
+			return 0;
+		}
 		--p;
 
 		switch ((*p) & 0xffff0000) {
