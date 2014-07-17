@@ -23,7 +23,7 @@ project ( DUMPALLOC )
 if (CMAKE_CROSSCOMPILING)
 
 set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_GNU_SOURCE=1 -O2 -fvisibility=hidden -ftls-model=initial-exec -fPIC -pthread " )
-set( CMAKE_SHARED_LINKER_FLAGS $ENV{LDFLAGS} "-pthread -Wl,-no-as-needed -shared" )
+set( CMAKE_SHARED_LINKER_FLAGS $ENV{LDFLAGS} "-pthread -Wl,-no-as-needed -shared -lrt" )
 add_library ( dumpalloc SHARED src/dumpalloc.c )
 
 else()

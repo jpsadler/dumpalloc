@@ -39,6 +39,7 @@
 #include <errno.h>
 
 #include <link.h>			/* for dl_iterate_phdr() */
+#include <time.h>
 
 
 typedef void* (*malloc_fn)(size_t);
@@ -175,9 +176,21 @@ static int write_addr(buffered_writer* writer, const void* addr) {
 	return write_uint64(writer, (uint64_t)addr);
 }
 
+
+static uint64_t getTimestamp() {
+
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+
+	return (uint64_t)ts.tv_sec;
+}
+
 static void dump_header() {
 
 	write_int32(writer, record_type_header);
+
+	write_uint64(writer, getTimestamp());
 
 	const uint32_t pid = (uint32_t)getpid();
 
@@ -365,6 +378,7 @@ static const known_object_t* add_object(struct dl_phdr_info *info) {
 static int dump_object(void* const base_addr, const char* const name) {
 
 	write_int32(writer, record_type_object);
+	write_uint64(writer, getTimestamp());
 	write_addr(writer, base_addr);
 	const uint32_t len = strlen(name);
 	write_uint32(writer, len);
@@ -434,6 +448,7 @@ static void dump_alloc(void* addr, size_t size) {
 
 	//fprintf(stderr, "dump_alloc() 0x%lx, %lu\n", addr, size);
 	write_int32(writer, record_type_alloc);
+	write_uint64(writer, getTimestamp());
 	write_addr(writer, addr);
 	write_uint32(writer, size);
 
@@ -451,6 +466,7 @@ static void dump_dealloc(void* addr) {
 
 	//fprintf(stderr, "dump_dealloc() 0x%lx\n", addr);
 	write_int32(writer, record_type_dealloc);
+	write_uint64(writer, getTimestamp());
 	write_addr(writer, addr);
 
 	writer->flush(writer);
