@@ -65,6 +65,7 @@ static volatile bool keep_reading = true;
 static std::string remote_command;
 static std::string remote_program;
 static uint32_t remote_pid;
+static uint64_t start_time;
 
 static uint64_t active_alloc_count = 0;
 static uint64_t active_alloc_total_cost = 0;
@@ -156,6 +157,8 @@ struct Object : boost::noncopyable {
 
 	const uint32_t id;
 
+	const uint64_t time_added;
+
 	const addr_t base_vaddr;
 
 	const std::string name;
@@ -174,8 +177,8 @@ struct Object : boost::noncopyable {
 	static uint32_t next_id;
 
 
-	explicit Object(const addr_t base_vaddr, const char* const name, const uint32_t name_len) :
-		id(next_id++), base_vaddr(base_vaddr), name(name, name_len), abfd(0), syms(0), num_syms(0) {};
+	explicit Object(const uint64_t time_added, const addr_t base_vaddr, const char* const name, const uint32_t name_len) :
+		id(next_id++), time_added(time_added), base_vaddr(base_vaddr), name(name, name_len), abfd(0), syms(0), num_syms(0) {};
 
 	~Object() {
 
@@ -301,12 +304,14 @@ public:
 
 struct Alloc : boost::noncopyable {
 
+	const uint64_t alloc_time;
 	const addr_t addr;
 	const uint32_t size;
 
 	const CallStack stack;
 
-	Alloc(const addr_t addr, const uint32_t size, CallStack& call_stack) : addr(addr), size(size), stack(call_stack) {
+	Alloc(const uint64_t alloc_time, const addr_t addr, const uint32_t size, CallStack& call_stack) : 
+		alloc_time(alloc_time), addr(addr), size(size), stack(call_stack) {
 	};
 };
 
@@ -594,9 +599,9 @@ public:
 		return object;
 	}
 
-	Object* create(const addr_t base_vaddr, const char* const object_name, const uint32_t object_name_len) {
+	Object* create(const uint64_t time_added, const addr_t base_vaddr, const char* const object_name, const uint32_t object_name_len) {
 
-		Object* object = new Object(base_vaddr, object_name, object_name_len);
+		Object* object = new Object(time_added, base_vaddr, object_name, object_name_len);
 
 		iterator insert_before = lower_bound(objects.begin(), objects.end(), base_vaddr, CompareObjectPtrByBaseVaddr());
 
@@ -606,7 +611,7 @@ public:
 	}
 
 	// dummy object to account for JIT code and other unresolvable frames.
-	Objects() : unknown_object(addr_t_max, "??", 2U) {
+	Objects() : unknown_object(start_time, addr_t_max, "??", 2U) {
 
 		objects.reserve(64U);
 	}
@@ -724,9 +729,9 @@ int remove_alloc_cost (Alloc& alloc) {
 }
 
 
-static Alloc* add_alloc(const addr_t addr, const uint32_t size, CallStack& stack) {
+static Alloc* add_alloc(const uint64_t alloc_time, const addr_t addr, const uint32_t size, CallStack& stack) {
 
-	std::auto_ptr<Alloc> alloc(new Alloc(addr, size, stack));
+	std::auto_ptr<Alloc> alloc(new Alloc(alloc_time, addr, size, stack));
 	Alloc* raw = alloc.get();
 
 
@@ -821,6 +826,10 @@ static int read(int fd, uint64_t& i) {
 
 static int read_header() {
 
+	if (read(read_fd, start_time) != sizeof(start_time)) {
+		fprintf(stderr, "Failed to read start time.\n");
+	}
+
 	if (read(read_fd, remote_pid) != sizeof(remote_pid)) {
 		fprintf(stderr, "Failed to read pid.\n");
 		return 1;
@@ -851,9 +860,15 @@ static int read_header() {
 
 static int read_object() {
 
+	uint64_t time_added;
 	addr_t base_vaddr;
 
 	//fprintf(stderr, "read_object()\n");
+
+	if (read(read_fd, time_added) != sizeof(time_added)) {
+		fprintf(stderr, "Failed to read time object was added.\n");
+		return 1;
+	}
 
 	if (read(read_fd, base_vaddr) != sizeof(base_vaddr)) {
 		fprintf(stderr, "Failed to read object base vaddr.\n");
@@ -877,7 +892,7 @@ static int read_object() {
 
 	//fprintf(stderr, "base_vaddr: 0x%llx, name: %s\n", base_vaddr, name);
 
-	known_objects.create(base_vaddr, name, name_len);
+	known_objects.create(time_added-start_time, base_vaddr, name, name_len);
 
 	return 0;
 }
@@ -885,10 +900,12 @@ static int read_object() {
 
 static int read_alloc() {
 
+	uint64_t alloc_time;
 	addr_t addr;
 	uint32_t size;
 
-	if (read(read_fd, addr) != sizeof(addr) ||
+	if (read(read_fd, alloc_time) != sizeof(alloc_time) ||
+		read(read_fd, addr) != sizeof(addr) ||
 		read(read_fd, size) != sizeof(size)) {
 
 		return 1;
@@ -923,7 +940,7 @@ static int read_alloc() {
 		stack.add_frame(call_site);
 	}
 
-	add_alloc(addr, size, stack);
+	add_alloc(alloc_time-start_time, addr, size, stack);
 
 	return 0;
 }
@@ -931,9 +948,11 @@ static int read_alloc() {
 
 static int read_dealloc() {
 
+	uint64_t dealloc_time;
 	addr_t addr;
 
-	if (read(read_fd, addr) != sizeof(addr)) {
+	if (read(read_fd, dealloc_time) != sizeof(dealloc_time) ||
+		read(read_fd, addr) != sizeof(addr)) {
 		return 1;
 	}
 
