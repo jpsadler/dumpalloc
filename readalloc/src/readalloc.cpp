@@ -970,6 +970,8 @@ typedef int (*read_fn)();
 
 static int start_reading() {
 
+	uint64_t records_consumed = 0;
+
 	int32_t rec_type = 0;
 
 	int ret = 0;
@@ -1006,6 +1008,10 @@ static int start_reading() {
 
 			fprintf(stderr, "Record handler failed. %d\n", rec_type);
 			return 3;
+		}
+
+		if ( ! (++records_consumed % 100000) ) {
+			fprintf(stderr, "*** %llu records processed.\n");
 		}
 	}
 
