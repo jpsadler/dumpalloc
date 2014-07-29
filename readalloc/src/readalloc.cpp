@@ -36,6 +36,7 @@
 #include <boost/functional/hash.hpp>
 #include <boost/scoped_array.hpp>
 #include <boost/lexical_cast.hpp>
+#include <set>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -176,6 +177,10 @@ struct Object : boost::noncopyable {
 
 	static uint32_t next_id;
 
+	// We keeps a log of the offset addresses of all symbols we fail to resolve.
+	// This is so we can dump them out for later analysis.
+	typedef std::set<uint64_t> unresolved_symbols_t;
+	unresolved_symbols_t unresolved_symbols;
 
 	explicit Object(const uint64_t time_added, const addr_t base_vaddr, const char* const name, const uint32_t name_len) :
 		id(next_id++), time_added(time_added), base_vaddr(base_vaddr), name(name, name_len), abfd(0), syms(0), num_syms(0) {};
@@ -414,8 +419,7 @@ CallSite* Object::lookup_or_create_callsite(const addr_t ra) {
 			symbol_name = UniqueString(sym_info.symbol_name);
 
 		} else {
-
-			fprintf(stderr, "Warning: Failed to lookup symbol. Object: %s, vaddr: 0x%llx\n", name.c_str(), addr);
+			unresolved_symbols.insert(ra);
 		}
 
 		// And source file
@@ -465,9 +469,9 @@ void Object::init_symtab() {
 
 	static const char* target = 0; //"mipsel-linux";
 
-	char abs_object_file[rootfs_dir_len+name.length()+2];
+	char abs_object_file[rootfs_dir.length()+name.length()+2];
 
-	snprintf(abs_object_file, sizeof(abs_object_file), "%s/%s", rootfs_dir, name.c_str());
+	snprintf(abs_object_file, sizeof(abs_object_file), "%s/%s", rootfs_dir.c_str(), name.c_str());
 
 	struct stat sb;
 
@@ -1159,6 +1163,22 @@ int generate_callgrind_output (const std::string& file_name) {
 	return 0;
 }
 
+int generate_unresolved_symbol_report (const std::string& file_name) {
+
+	FILE* file = fopen(file_name.c_str(), "w+");
+
+	BOOST_FOREACH(Object* object, known_objects) {
+
+		BOOST_FOREACH(const uint64_t addr, object->unresolved_symbols) {
+			fprintf(file, "%s 0x%llx\n", object->name.c_str(), addr);
+		}
+	}
+
+	fclose(file);
+
+	return 0;
+}
+
 
 void signal_handler(int sig) {
 
@@ -1232,6 +1252,18 @@ int main(int argc, const char* argv[]) {
 	fprintf(stderr, "Generating callgrind file: %s\n", callgrind_file.c_str());
 
 	generate_callgrind_output(callgrind_file);
+
+	std::string unresolved_symbol_report_file;
+
+	if (remote_pid) {
+		unresolved_symbol_report_file = remote_program + "." + boost::lexical_cast<std::string>(remote_pid) + ".unresolved_symbols";
+	} else {
+		unresolved_symbol_report_file = "unknown.unresolved_symbols";
+	}
+
+	fprintf(stderr, "Generated unresolved symbols report: %s\n", unresolved_symbol_report_file.c_str());
+
+	generate_unresolved_symbol_report(unresolved_symbol_report_file);
 
 	return 0;
 }
