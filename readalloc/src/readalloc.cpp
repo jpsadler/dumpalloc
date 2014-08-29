@@ -36,7 +36,9 @@
 #include <boost/functional/hash.hpp>
 #include <boost/scoped_array.hpp>
 #include <boost/lexical_cast.hpp>
+#include <boost/program_options.hpp>
 #include <set>
+#include <iostream>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,10 +58,13 @@
 
 #include <demangle.h>
 
+
+namespace po = boost::program_options;
+
+
 static const int read_fd = 0;
 
-static const char* rootfs_dir = 0;
-static size_t rootfs_dir_len = 0;
+static std::string rootfs_dir;
 
 static volatile bool keep_reading = true;
 
@@ -67,10 +72,10 @@ static std::string remote_command;
 static std::string remote_program;
 static uint32_t remote_pid;
 static uint64_t start_time;
+static uint64_t latest_alloc_timestamp;
 
 static uint64_t active_alloc_count = 0;
 static uint64_t active_alloc_total_cost = 0;
-
 
 class UniqueString {
 
@@ -220,6 +225,8 @@ struct Object : boost::noncopyable {
 
 	CallSite* add_callsite(const addr_t addr, const Symbol& from_symbol, const SourceFile& source_file,
 		const size_t line_no);
+
+	void clear_callsite_costs();
 };
 
 uint32_t Object::next_id = 1;
@@ -266,6 +273,8 @@ struct CallSite : boost::noncopyable {
 		cum_alloc(0U) {};
 
 	OnwardCall& add_onward_call(CallSite* const onward_call);
+
+	void clear_costs();
 };
 
 class CallStack : boost::noncopyable {
@@ -381,6 +390,13 @@ static void lookup_symbol_in_section(bfd* abfd, asection* section, void *data) {
 					&sym_info->source_file, 
 					&sym_info->symbol_name, 
 					&sym_info->line_no);
+}
+
+void Object::clear_callsite_costs() {
+
+	BOOST_FOREACH( typename outward_calls_t::reference entry, outward_calls ) {
+		entry.second->clear_costs();
+	}
 }
 
 
@@ -572,6 +588,18 @@ OnwardCall& CallSite::add_onward_call(CallSite* const next_site) {
 	return onward_calls.back();
 }
 
+
+void CallSite::clear_costs() {
+	times_called = 0;
+	cum_alloc = 0;
+
+	BOOST_FOREACH( OnwardCall& oc, onward_calls) {
+		oc.times_called = 0;
+		oc.cum_alloc = 0;
+	}
+}
+
+
 struct CompareObjectPtrByBaseVaddr {
 
 	bool operator()(const Object* const a, const addr_t b) const {
@@ -645,7 +673,6 @@ typedef Objects known_objects_t;
 static known_objects_t known_objects;
 
 
-
 typedef boost::ptr_map<const std::string, SourceFile> source_file_map_t;
 
 static source_file_map_t known_source_files;
@@ -707,29 +734,24 @@ int apply_alloc_cost (Alloc& alloc) {
 	return 0;
 }
 
+void clear_all_alloc_costs() {
 
-int remove_alloc_cost (Alloc& alloc) { 
-
-	CallSite* prev_callsite = 0;
-
-	BOOST_FOREACH(CallSite* site, alloc.stack) {
-
-		--site->times_called;
-		site->cum_alloc -= alloc.size;
-
-		if (prev_callsite) {
-			OnwardCall& onward_call = site->add_onward_call(prev_callsite);
-			--onward_call.times_called;
-			onward_call.cum_alloc -= alloc.size;
-		}
-
-		prev_callsite = site;
+	BOOST_FOREACH(Object* object, known_objects) {
+		object->clear_callsite_costs();
 	}
 
-	--active_alloc_count;
-	active_alloc_total_cost -= alloc.size;
+	active_alloc_count = 0;
+	active_alloc_total_cost = 0;
+}
 
-	return 0;
+
+void apply_alloc_costs(const uint64_t starting_timestamp, const uint64_t ending_timestamp) {
+
+	BOOST_FOREACH(typename alloc_map_t::reference alloc, known_allocs) {
+		if (alloc.second->alloc_time >= starting_timestamp && alloc.second->alloc_time < ending_timestamp) {
+			apply_alloc_cost(*alloc->second);
+		}
+	}
 }
 
 
@@ -746,14 +768,12 @@ static Alloc* add_alloc(const uint64_t alloc_time, const addr_t addr, const uint
 		fprintf(stderr, "Warning: Duplicate allocation address: 0x%llx detected. Something is very wrong...\n", addr);
 		typename alloc_map_t::auto_type old = known_allocs.replace(existing, alloc);
 
-		remove_alloc_cost(*old);
-
 	} else {
 
 		known_allocs.insert(addr, alloc);
 	}
 
-	apply_alloc_cost(*raw);
+	latest_alloc_timestamp = alloc_time;
 
 	return raw;
 }
@@ -763,8 +783,6 @@ static bool delete_alloc(const addr_t addr) {
 	alloc_map_t::iterator found_at = known_allocs.find(addr);
 
 	if (found_at != known_allocs.end()) {
-
-		remove_alloc_cost(*found_at->second);
 
 		known_allocs.erase(found_at);
 
@@ -1026,7 +1044,7 @@ static int start_reading() {
 }
 
 
-int generate_callgrind_output (const std::string& file_name) {
+int generate_callgrind_output (const std::string& file_name, const uint64_t starting_timestamp, const uint64_t ending_timestamp) {
 
 	FILE* file = fopen(file_name.c_str(), "w+");
 
@@ -1163,11 +1181,61 @@ int generate_callgrind_output (const std::string& file_name) {
 	return 0;
 }
 
+
+void generate_callgrind_output_files(const uint32_t slice_interval_secs) {
+
+	std::string base_callgrind_filename;
+
+	if (remote_pid) {
+		base_callgrind_filename = remote_program + "." + boost::lexical_cast<std::string>(remote_pid);
+	} else {
+		base_callgrind_filename = "unknown";
+	}
+
+	std::string callgrind_file = base_callgrind_filename + ".callgrind";
+
+	fprintf(stderr, "Number of active allocations: %llu, total cost: %llu, number of ELF objects: %lu\n",
+		active_alloc_count, active_alloc_total_cost, known_objects.size());
+
+	apply_alloc_costs(0, latest_alloc_timestamp+1);
+
+	fprintf(stderr, "Generating full callgrind file: %s\n", callgrind_file.c_str());
+
+	generate_callgrind_output(callgrind_file, 0, latest_alloc_timestamp+1);
+
+	if (slice_interval_secs) {
+
+		uint32_t slice_num = 0;
+
+		for (uint64_t starting_timestamp = 0; starting_timestamp <= latest_alloc_timestamp;
+			starting_timestamp += static_cast<uint64_t>(slice_interval_secs),++slice_num) {
+
+			uint64_t ending_timestamp = starting_timestamp+static_cast<uint64_t>(slice_interval_secs);
+
+			clear_all_alloc_costs();
+			apply_alloc_costs(starting_timestamp, ending_timestamp);
+
+			callgrind_file = base_callgrind_filename + "_slice_" +
+				boost::lexical_cast<std::string>(slice_num) + "_" +
+				boost::lexical_cast<std::string>(starting_timestamp) + "-" +
+				boost::lexical_cast<std::string>(ending_timestamp)+ ".callgrind";
+
+			fprintf(stderr, "Generating slice callgrind file: %s\n", callgrind_file.c_str());
+
+			generate_callgrind_output(callgrind_file, starting_timestamp, ending_timestamp);
+		}
+	}
+}
+
+
 int generate_unresolved_symbol_report (const std::string& file_name) {
 
 	FILE* file = fopen(file_name.c_str(), "w+");
 
+	fprintf(stderr, "Objects:\n");
 	BOOST_FOREACH(Object* object, known_objects) {
+
+		fprintf(stderr, "@0x%llx %s\n", object->base_vaddr,  object->name.c_str());
 
 		BOOST_FOREACH(const uint64_t addr, object->unresolved_symbols) {
 			fprintf(file, "%s 0x%llx\n", object->name.c_str(), addr);
@@ -1212,22 +1280,51 @@ int init_bfd() {
 
 int main(int argc, const char* argv[]) {
 
-	fprintf(stderr,
+	static const char* const copyright = 
 		"readalloc Copyright (C) 2014 John Sadler\n"
 		"This program comes with ABSOLUTELY NO WARRANTY\n"
 		"This is free software, and you are welcome to redistribute it\n"
-		"under certain conditions; see http://www.gnu.org/licenses/gpl.html for details.\n\n\n");
+		"under certain conditions; see http://www.gnu.org/licenses/gpl.html for details.\n\n\n";
 
-	if (argc < 2) {
-		fprintf(stderr,
-			"Usage: cat <libdumpalloc dump> | %s <rootfs dir>\n", argv[0]);
-		exit(1);
+	fprintf(stderr, copyright);
+
+	uint32_t time_slice_interval_secs = 0;
+
+	po::options_description desc(
+		"Options"
+	);
+
+	desc.add_options()
+		("help", "show help message")
+		("rootfs", "path to the rootfs of the device")
+		("time-slice-interval-secs", po::value<uint32_t>(), 
+		"chop-up the total runtime into a number of slices and generate a separate "
+		"callgrind file for each, detailing only the allocations made in that period");
+
+	po::variables_map vm;
+	po::positional_options_description p;
+	p.add("rootfs", -1);
+
+	po::store(po::command_line_parser(argc, argv).options(desc).positional(p).run(), vm);
+	po::notify(vm);
+
+	if (vm.count("help")) {
+		std::cerr << desc << "\n";
+		return 1;
 	}
 
-	rootfs_dir = argv[1];
-	rootfs_dir_len = strlen(rootfs_dir);
+	if ( ! vm.count("rootfs") ) {
+		fprintf(stderr, "Must provide path to device rootfs.\n");
+		return 1;
+	} else {
+		rootfs_dir = vm["rootfs"].as<std::string>();
+	}
 
-	fprintf(stderr, "Rootfs: %s\n", rootfs_dir);
+	if (vm.count("time-slice-interval-secs")) {
+		time_slice_interval_secs = vm["time-slice-interval-secs"].as<uint32_t>();
+	}
+
+	fprintf(stderr, "Rootfs: %s\n", rootfs_dir.c_str());
 
 	init_bfd();
 
@@ -1238,20 +1335,7 @@ int main(int argc, const char* argv[]) {
 
 	start_reading();
 
-	fprintf(stderr, "Number of active allocations: %llu, total cost: %llu, number of ELF objects: %lu\n", 
-		active_alloc_count, active_alloc_total_cost, known_objects.size());
-
-	std::string callgrind_file;
-
-	if (remote_pid) {
-		callgrind_file = remote_program + "." + boost::lexical_cast<std::string>(remote_pid) + ".callgrind";
-	} else {
-		callgrind_file = "unknown.callgrind";
-	}
-
-	fprintf(stderr, "Generating callgrind file: %s\n", callgrind_file.c_str());
-
-	generate_callgrind_output(callgrind_file);
+	generate_callgrind_output_files(time_slice_interval_secs);
 
 	std::string unresolved_symbol_report_file;
 

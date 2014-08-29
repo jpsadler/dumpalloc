@@ -38,5 +38,5 @@ set( CMAKE_EXE_LINKER_FLAGS " -L${install_dir}/lib -Wl,-as-needed " )
 
 add_executable ( readalloc src/readalloc.cpp )
 add_dependencies ( readalloc binutils-2.24 )
-target_link_libraries( readalloc bfd iberty z dl c   )
+target_link_libraries( readalloc bfd iberty z dl c boost_program_options  )
 
