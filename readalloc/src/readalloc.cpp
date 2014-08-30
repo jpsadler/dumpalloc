@@ -1187,12 +1187,12 @@ void generate_callgrind_output_files(const uint32_t slice_interval_secs) {
 	std::string base_callgrind_filename;
 
 	if (remote_pid) {
-		base_callgrind_filename = remote_program + "." + boost::lexical_cast<std::string>(remote_pid);
+		base_callgrind_filename = "callgrind.out." + remote_program + "." + boost::lexical_cast<std::string>(remote_pid);
 	} else {
-		base_callgrind_filename = "unknown";
+		base_callgrind_filename = "callgrind.out.unknown";
 	}
 
-	std::string callgrind_file = base_callgrind_filename + ".callgrind";
+	std::string callgrind_file = base_callgrind_filename;
 
 	fprintf(stderr, "Number of active allocations: %llu, total cost: %llu, number of ELF objects: %lu\n",
 		active_alloc_count, active_alloc_total_cost, known_objects.size());
@@ -1218,7 +1218,7 @@ void generate_callgrind_output_files(const uint32_t slice_interval_secs) {
 			callgrind_file = base_callgrind_filename + "_slice_" +
 				boost::lexical_cast<std::string>(slice_num) + "_" +
 				boost::lexical_cast<std::string>(starting_timestamp) + "-" +
-				boost::lexical_cast<std::string>(ending_timestamp)+ ".callgrind";
+				boost::lexical_cast<std::string>(ending_timestamp);
 
 			fprintf(stderr, "Generating slice callgrind file: %s\n", callgrind_file.c_str());
 
