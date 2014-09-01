@@ -22,9 +22,20 @@ project ( DUMPALLOC )
 
 if (CMAKE_CROSSCOMPILING)
 
+find_package(PythonLibs)
+
 set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_GNU_SOURCE=1 -O2 -fvisibility=hidden -ftls-model=initial-exec -fPIC -pthread " )
 set( CMAKE_SHARED_LINKER_FLAGS $ENV{LDFLAGS} "-pthread -Wl,-no-as-needed -shared -lrt" )
 add_library ( dumpalloc SHARED src/dumpalloc.c )
+
+# Only build the Python support if Python libs are available. It's a relatively-heavy
+# depenency, so we won't build it ourselves.
+#
+if (PYTHON_LIBRARIES)
+add_library ( dumpalloc-python SHARED src/walk-python-stack.c )
+target_link_libraries ( dumpalloc-python "${PYTHON_LIBRARIES}" )
+target_include_directories ( dumpalloc-python PRIVATE "${PYTHON_INCLUDE_DIRS}" )
+endif()
 
 else()
 

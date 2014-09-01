@@ -21,6 +21,7 @@
 #include "../include/endian.h"
 #include "buffered-writer.h"
 #include "walk-stack.h"
+#include "walk-python-stack.h"
 
 #include <dlfcn.h>
 #include <stdio.h>
@@ -41,6 +42,7 @@
 #include <link.h>			/* for dl_iterate_phdr() */
 #include <time.h>
 
+static walk_python_stack_fn walk_python_stack = NULL;
 
 typedef void* (*malloc_fn)(size_t);
 
@@ -443,6 +445,27 @@ static int dump_frame(void* ra, void* user_data) {
 	return 1;
 }
 
+static int dump_python_frame(const char* function, const char* source_file, const uint32_t line_no) {
+
+	const uint32_t function_len = (function?strlen(function):0);
+	write_uint32(writer, function_len);
+
+	if (function_len) {
+		writer->write(writer, function, function_len);
+	}
+
+	const uint32_t source_file_len = (source_file?strlen(source_file):0);
+	write_uint32(writer, source_file_len);
+
+	if (source_file_len) {
+		writer->write(writer, source_file, source_file_len);
+	}
+
+	write_uint32(writer, line_no);
+
+	return 1;
+}
+
 
 static void dump_alloc(void* addr, size_t size) {
 
@@ -455,7 +478,13 @@ static void dump_alloc(void* addr, size_t size) {
 	size_t num_frames = 0;
 
 	walk_stack(&dump_frame, &get_backward_scan_earliest_addr, &num_frames);
-	
+
+	if (walk_python_stack) {
+		write_addr(writer, 1U);
+		walk_python_stack(&dump_python_frame);
+		write_uint32(writer, 0U);
+	}
+
 	// Sentinal marking end-of frames.
 	write_addr(writer, 0U);
 
@@ -472,48 +501,62 @@ static void dump_dealloc(void* addr) {
 	writer->flush(writer);
 }
 
-
 //__attribute__((constructor(1000)))
 static void init() {
 
 	pthread_mutex_lock(&mutex);
 
-	fprintf(stderr, "init()\n");
+	fprintf(stderr, "libdumpalloc: init()\n");
 
 	++malloc_depth;
 
 	real_dlopen = (dlopen_fn)dlsym(RTLD_NEXT, "dlopen");
 
 	if (!real_dlopen) {
-		fprintf(stderr, "Failed to find real dlopen!\n");
+		fprintf(stderr, "libdumpalloc: Failed to find real `dlopen()`!\n");
 		exit(1);
 	}
+
+	fprintf(stderr, "libdumpalloc: Looking for `walk_python_stack()`...\n");
+
+	walk_python_stack = (walk_python_stack_fn)dlsym(NULL, "walk_python_stack");
+
+	if ( ! walk_python_stack ) {
+
+		fprintf(stderr, "libdumpalloc: Failed to find `walk_python_stack()`. "
+			"Python backtracing will be disabled.\n");
+	} else {
+		fprintf(stderr, "libdumpalloc: Python backtracing is enabled.\n");
+	}
+
+
+	fflush(stderr);
 
 	real_malloc = (malloc_fn)dlsym(RTLD_NEXT, "malloc");
 
 	if (!real_malloc) {
-		fprintf(stderr, "Failed to find real malloc!\n");
+		fprintf(stderr, "libdumpalloc: Failed to find real malloc!\n");
 		exit(1);
 	}
 
 	real_free = (free_fn)dlsym(RTLD_NEXT, "free");
 
 	if (!real_free) {
-		fprintf(stderr, "Failed to find real free!\n");
+		fprintf(stderr, "libdumpalloc: Failed to find real free!\n");
 		exit(1);
 	}
 
 	real_calloc = (calloc_fn)dlsym(RTLD_NEXT, "calloc");
 
 	if (!real_calloc) {
-		fprintf(stderr, "Failed to find real calloc!\n");
+		fprintf(stderr, "libdumpalloc: Failed to find real calloc!\n");
 		exit(1);
 	}
 
 	real_realloc = (realloc_fn)dlsym(RTLD_NEXT, "realloc");
 
 	if (!real_realloc) {
-		fprintf(stderr, "Failed to find real realloc!\n");
+		fprintf(stderr, "libdumpalloc: Failed to find real realloc!\n");
 		exit(1);
 	}
 
@@ -521,15 +564,14 @@ static void init() {
 
 	if ( ! resolve_addr(&malloc_sym_info, &malloc) ) {
 
-		fprintf(stderr, "Failed to resolve address of my own malloc()!\n");
+		fprintf(stderr, "libdumpalloc: Failed to resolve address of my own malloc()!\n");
 		exit(1);
 	}
 
 	dumpalloc_seg_start = malloc_sym_info.seg_start_addr;
 	dumpalloc_seg_end = malloc_sym_info.seg_end_addr;
 
-
-	fprintf(stderr, "Loaded libs: \n");
+	fprintf(stderr, "libdumpalloc: Loaded libs: \n");
 
 	print_loaded_libs();
 
@@ -546,11 +588,11 @@ static void init() {
 		if (output_file) {
 
 			if ((dump_fd = open(output_file, (O_CREAT | O_TRUNC | O_WRONLY))) == -1) {
-				fprintf(stderr, "Failed to open output file for writing: %s\n", output_file);
+				fprintf(stderr, "libdumpalloc: Failed to open output file for writing: %s\n", output_file);
 				exit(1);
 			}
 		} else {
-			fprintf(stderr, "Error! you must set one of the environment variables: 'DUMPALLOC_SERVER' or "
+			fprintf(stderr, "libdumpalloc: Error! you must set one of the environment variables: 'DUMPALLOC_SERVER' or "
 				"'DUMPALLOC_FILE' to get any output!\n");
 			exit(1);
 		}
@@ -564,7 +606,7 @@ static void init() {
 
 	dump_new_objects();
 
-	fprintf(stderr, "init() done.\n");
+	fprintf(stderr, "libdumpalloc: init() done.\n");
 
 	fflush(stderr);
 
