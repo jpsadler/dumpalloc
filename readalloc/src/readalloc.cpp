@@ -46,6 +46,8 @@
 #include <boost/scoped_array.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/program_options.hpp>
+#include <boost/bind.hpp>
+
 #include <set>
 #include <iostream>
 
@@ -337,6 +339,65 @@ static int read_object() {
 	return 0;
 }
 
+static int read_python_frames(CallStack& stack) {
+
+	PythonObject& object = known_objects.get_python_object();
+
+	while ( true ) {
+
+		uint32_t function_len;
+
+		if (read(read_fd, function_len) != sizeof(function_len)) {
+			fprintf(stderr, "Failed to read Python frame!\n");
+			return 1;
+		}
+
+		if ( ! function_len ) {
+			break;
+		}
+
+		char function[function_len+1];
+
+		if (read_string(read_fd, function, function_len) != function_len) {
+			fprintf(stderr, "Failed to read Python frame (function name)\n");
+			return 1;
+		}
+
+		function[function_len] = 0;
+
+		uint32_t source_file_len;
+
+		if (read(read_fd, source_file_len) != sizeof(source_file_len)) {
+			fprintf(stderr, "Failed to read Python frame (source file)\n");
+			return 1;
+		}
+
+		char source_file[source_file_len+1];
+
+		source_file[0] = 0;
+
+		if (source_file_len && read_string(read_fd, source_file, source_file_len) != source_file_len) {
+			fprintf(stderr, "Failed to read Python frame (source file)\n");
+			return 1;
+		}
+
+		source_file[source_file_len] = 0;
+
+		uint32_t line_no;
+
+		if (read(read_fd, line_no) != sizeof(line_no)) {
+			fprintf(stderr, "Failed to read Python frame (line no.)\n");
+			return 1;
+		}
+
+		CallSite* call_site = object.lookup_or_create_callsite(function, source_file, line_no, &lookup_or_create_sourcefile);
+
+		stack.add_frame(call_site);
+	}
+
+	return 0;
+}
+
 
 static int read_alloc() {
 
@@ -351,8 +412,6 @@ static int read_alloc() {
 		return 1;
 	}
 
-	//fprintf(stderr, "read_alloc() addr: %llx, size: %lu\n", addr, size);
-
 	// read the call stack 
 
 	CallStack stack;
@@ -366,18 +425,18 @@ static int read_alloc() {
 			return 1;
 		}
 
-		//fprintf(stderr, "frame: 0x%llx\n", ra);
-
 		if (ra == 0) break;
 
+		if (ra == 1) {
+			read_python_frames(stack);
+		} else {
 
-		Object* object = known_objects.lookup_by_ra(ra);
+			Object* object = known_objects.lookup_by_ra(ra);
 
-		//fprintf(stderr, "resolved to object: %s\n", object->name.c_str());
+			CallSite* call_site = object->lookup_or_create_callsite(ra, &lookup_or_create_sourcefile, rootfs_dir);
 
-		CallSite* call_site = object->lookup_or_create_callsite(ra, &lookup_or_create_sourcefile, rootfs_dir);
-
-		stack.add_frame(call_site);
+			stack.add_frame(call_site);
+		}
 	}
 
 	add_alloc(alloc_time-start_time, addr, size, stack);
@@ -462,6 +521,86 @@ static int start_reading() {
 }
 
 
+bool generate_callgrind_output_for_object_calls(FILE* file, Object* object,
+	int* const visited_objects, int* const visited_symbols, int* const visited_sourcefiles, CallSite* call) {
+
+	if (call->cum_alloc) {
+
+		if ( ! visited_sourcefiles[call->source_file.id] ) {
+			fprintf(file, "fl=(%lu) %s\n", call->source_file.id, call->source_file.name.c_str());
+			visited_sourcefiles[call->source_file.id] = 1;
+		} else {
+			fprintf(file, "fl=(%lu)\n", call->source_file.id);
+		}
+
+		if ( ! visited_symbols[call->from_symbol.id] ) {
+			fprintf(file, "fn=(%lu) %s\n", call->from_symbol.id, call->from_symbol.get_name());
+			visited_symbols[call->from_symbol.id] = 1;
+		} else {
+			fprintf(file, "fn=(%lu)\n", call->from_symbol.id);
+		}
+
+		if (call->onward_calls.empty()) {
+
+			// Leaf frame. Doesn't call anything else, so any cost must be 'self' cost.
+
+			fprintf(file, "0x%llx %lu %llu\n\n", call->addr, call->line_no, call->cum_alloc);
+		}
+
+		BOOST_FOREACH(OnwardCall& oc, call->onward_calls) {
+
+			CallSite* tc = oc.next;
+
+			if (oc.cum_alloc) {
+
+				if (&tc->from_symbol.object != object) {
+
+					if ( ! visited_objects[tc->from_symbol.object.id] ) {
+						fprintf(file, "cob=(%lu) %s\n", tc->from_symbol.object.id,
+							tc->from_symbol.object.name.c_str());
+
+						visited_objects[tc->from_symbol.object.id] = 1;
+					} else {
+						fprintf(file, "cob=(%lu)\n", tc->from_symbol.object.id);
+					}
+				}
+
+				if (&tc->source_file != &call->source_file) {
+
+					if ( ! visited_sourcefiles[tc->source_file.id] ) {
+						fprintf(file, "cfl=(%lu) %s\n", tc->source_file.id, tc->source_file.name.c_str());
+						visited_sourcefiles[tc->source_file.id] = 1;
+
+					} else {
+						fprintf(file, "cfl=(%lu)\n", tc->source_file.id);
+					}
+				}
+
+				if ( ! visited_symbols[tc->from_symbol.id] ) {
+					fprintf(file, "cfn=(%lu) %s\n", tc->from_symbol.id, tc->from_symbol.get_name());
+					visited_symbols[tc->from_symbol.id] = 1;
+				} else {
+					fprintf(file, "cfn=(%lu)\n", tc->from_symbol.id);
+				}
+
+				fprintf(file, 
+					"calls=%llu 0x%llx %lu\n"
+					"0x%llx %lu %llu\n\n",
+					oc.times_called, call->addr, call->line_no,
+					tc->addr, tc->line_no, oc.cum_alloc
+				);
+
+			} // end-if (onward call has cost)
+
+		} // end for-each (onward call)
+
+	} // end-if (call-site has cost)
+
+	return true;
+}
+
+
+
 int generate_callgrind_output (const std::string& file_name, const uint64_t starting_timestamp, const uint64_t ending_timestamp) {
 
 	FILE* file = fopen(file_name.c_str(), "w+");
@@ -488,7 +627,7 @@ int generate_callgrind_output (const std::string& file_name, const uint64_t star
 	// Instead, we have to output the name along with the id the first time we encounter each
 	// entity.
 
-	const size_t total_entities = Object::next_id + Symbol::next_id + SourceFile::next_id;
+	const size_t total_entities = Object::get_next_id() + Symbol::get_next_id() + SourceFile::next_id;
 
 	boost::scoped_array<int> visited_entities(new int[total_entities]);
 
@@ -496,9 +635,9 @@ int generate_callgrind_output (const std::string& file_name, const uint64_t star
 
 	int* const visited_objects = visited_entities.get();
 
-	int* const visited_symbols = visited_entities.get() + Object::next_id;
+	int* const visited_symbols = visited_entities.get() + Object::get_next_id();
 
-	int* const visited_sourcefiles = visited_symbols + Symbol::next_id;
+	int* const visited_sourcefiles = visited_symbols + Symbol::get_next_id();
 
 
 	BOOST_FOREACH(Object* object, known_objects) {
@@ -510,85 +649,7 @@ int generate_callgrind_output (const std::string& file_name, const uint64_t star
 			fprintf(file, "ob=(%lu)\n", object->id);
 		}
 
-		BOOST_FOREACH(const Object::outward_calls_t::value_type& cp, object->outward_calls) {
-			
-			CallSite* call = cp->second;
-
-			if (call->cum_alloc) {
-
-				if ( ! visited_sourcefiles[call->source_file.id] ) {
-					fprintf(file, "fl=(%lu) %s\n", call->source_file.id, call->source_file.name.c_str());
-					visited_sourcefiles[call->source_file.id] = 1;
-				} else {
-					fprintf(file, "fl=(%lu)\n", call->source_file.id);
-				}
-
-				if ( ! visited_symbols[call->from_symbol.id] ) {
-					fprintf(file, "fn=(%lu) %s\n", call->from_symbol.id, call->from_symbol.get_name());
-					visited_symbols[call->from_symbol.id] = 1;
-				} else {
-					fprintf(file, "fn=(%lu)\n", call->from_symbol.id);
-				}
-
-				if (call->onward_calls.empty()) {
-	
-					// Leaf frame. Doesn't call anything else, so any cost must be 'self' cost.
-
-					fprintf(file, "0x%llx %lu %llu\n\n", call->addr, call->line_no, call->cum_alloc);
-
-				}
-
-				BOOST_FOREACH(OnwardCall& oc, call->onward_calls) {
-
-					CallSite* tc = oc.next;
-
-					if (oc.cum_alloc) {
-
-						if (&tc->from_symbol.object != object) {
-
-							if ( ! visited_objects[tc->from_symbol.object.id] ) {
-								fprintf(file, "cob=(%lu) %s\n", tc->from_symbol.object.id,
-									tc->from_symbol.object.name.c_str());
-
-								visited_objects[tc->from_symbol.object.id] = 1;
-							} else {
-								fprintf(file, "cob=(%lu)\n", tc->from_symbol.object.id);
-							}
-						}
-
-						if (&tc->source_file != &call->source_file) {
-
-							if ( ! visited_sourcefiles[tc->source_file.id] ) {
-								fprintf(file, "cfl=(%lu) %s\n", tc->source_file.id, tc->source_file.name.c_str());
-								visited_sourcefiles[tc->source_file.id] = 1;
-
-							} else {
-								fprintf(file, "cfl=(%lu)\n", tc->source_file.id);
-							}
-					
-						}
-
-						if ( ! visited_symbols[tc->from_symbol.id] ) {
-							fprintf(file, "cfn=(%lu) %s\n", tc->from_symbol.id, tc->from_symbol.get_name());
-							visited_symbols[tc->from_symbol.id] = 1;
-						} else {
-							fprintf(file, "cfn=(%lu)\n", tc->from_symbol.id);
-						}
-
-						fprintf(file, 
-							"calls=%llu 0x%llx %lu\n"
-							"0x%llx %lu %llu\n\n",
-							oc.times_called, call->addr, call->line_no,
-							tc->addr, tc->line_no, oc.cum_alloc
-						);
-
-					} // end-if (onward call has cost)
-
-				} // end for-each (onward call)
-
-			} // end-if (call-site has cost)
-
-		} // end for-each (call-site)
+		object->visit_outward_calls(boost::bind(&generate_callgrind_output_for_object_calls, file, object, visited_objects, visited_symbols, visited_sourcefiles, _1));
 
 	} // end for-each (known object)
 
@@ -650,12 +711,12 @@ int generate_unresolved_symbol_report (const std::string& file_name) {
 
 	FILE* file = fopen(file_name.c_str(), "w+");
 
-	fprintf(stderr, "Objects:\n");
+	//fprintf(stderr, "Objects:\n");
 	BOOST_FOREACH(Object* object, known_objects) {
 
-		fprintf(stderr, "@0x%llx %s\n", object->base_vaddr,  object->name.c_str());
+		//fprintf(stderr, "@0x%llx %s\n", object->base_vaddr,  object->name.c_str());
 
-		BOOST_FOREACH(const uint64_t addr, object->unresolved_symbols) {
+		BOOST_FOREACH(const uint64_t addr, object->get_unresolved_symbols()) {
 			fprintf(file, "%s 0x%llx\n", object->name.c_str(), addr);
 		}
 	}

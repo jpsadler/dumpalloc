@@ -31,14 +31,14 @@ uint32_t Object::next_id = 1;
 
 struct SymbolLookupInfo {
 
-	Object& object;
+	ElfObject& object;
 	bfd_vma addr;
 	bfd_boolean found;
 	const char* symbol_name;
 	const char* source_file;
 	unsigned int line_no;
 
-	explicit SymbolLookupInfo(Object& object, bfd_vma addr) :
+	explicit SymbolLookupInfo(ElfObject& object, bfd_vma addr) :
 		object(object), addr(addr), found(FALSE), symbol_name("??"),
 		source_file("??"), line_no(0) {}
 
@@ -48,7 +48,7 @@ struct SymbolLookupInfo {
 };
 
 
-static void lookup_symbol_in_section(bfd* abfd, asection* section, void *data) {
+void ElfObject::lookup_symbol_in_section(bfd* abfd, asection* section, void *data) {
 
 	//fprintf(stderr, "lookup_symbol_in_section()\n");
 
@@ -92,16 +92,18 @@ static void lookup_symbol_in_section(bfd* abfd, asection* section, void *data) {
 }
 
 
+static bool callsite_clear_costs(CallSite* call) {
+	call->clear_costs();
+	return true;
+}
 
 void Object::clear_callsite_costs() {
 
-	BOOST_FOREACH( typename outward_calls_t::reference entry, outward_calls ) {
-		entry.second->clear_costs();
-	}
+	visit_outward_calls(&callsite_clear_costs);
 }
 
 
-CallSite* Object::lookup_or_create_callsite(const addr_t ra, sourcefile_lookup_fn lookup_sourcefile, const std::string& rootfs_dir) {
+CallSite* ElfObject::lookup_or_create_callsite(const addr_t ra, sourcefile_lookup_fn lookup_sourcefile, const std::string& rootfs_dir) {
 
 	// calculate addr within object.
 	addr_t addr = ra-base_vaddr;
@@ -169,7 +171,7 @@ CallSite* Object::lookup_or_create_callsite(const addr_t ra, sourcefile_lookup_f
 }
 
 
-CallSite* Object::add_callsite(const addr_t addr, const Symbol& from_symbol, const SourceFile& source_file,
+CallSite* ElfObject::add_callsite(const addr_t addr, const Symbol& from_symbol, const SourceFile& source_file,
 	const size_t line_no) {
 
 	CallSite* call_site = new CallSite(addr, from_symbol, source_file, line_no);
@@ -180,7 +182,7 @@ CallSite* Object::add_callsite(const addr_t addr, const Symbol& from_symbol, con
 }
 
 
-void Object::init_symtab(const std::string& rootfs_dir) {
+void ElfObject::init_symtab(const std::string& rootfs_dir) {
 
 	if (abfd) return;
 
@@ -272,6 +274,44 @@ void Object::init_symtab(const std::string& rootfs_dir) {
 		fprintf(stderr, "Warning: failed to read symbol table from: %s\n", abs_object_file);
 
 	}
+}
+
+
+bool ComparePythonCallSite::operator()(const CallSite& l, const CallSite& r) const {
+	if (&l.from_symbol < &r.from_symbol) return true;
+	if (&l.from_symbol > &r.from_symbol) return false;
+	if (l.line_no < r.line_no) return true;
+	if (l.line_no > r.line_no) return false;
+	if (&l.source_file < &r.source_file) return true;
+	return false;
+}
+
+
+
+CallSite* PythonObject::lookup_or_create_callsite(const char* const function, const char* const source_file, const uint32_t line_no, sourcefile_lookup_fn lookup_sourcefile) {
+
+	Symbol* symbol = lookup_symbol(function);
+
+	if ( ! symbol ) {
+
+		symbol = add_symbol(function);
+	}
+
+	SourceFile* source_file_obj = lookup_sourcefile(source_file);
+
+	CallSite tmp(0, *symbol, *source_file_obj, line_no);
+
+	outward_calls_t::iterator i = outward_calls.find(tmp);
+
+	if (i != outward_calls.end()) {
+		return &(*i);
+	}
+
+	CallSite* call_site = new CallSite(0, *symbol, *source_file_obj, line_no);
+
+	outward_calls.insert(call_site);
+
+	return call_site;
 }
 
 

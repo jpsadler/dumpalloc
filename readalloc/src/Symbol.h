@@ -23,35 +23,72 @@
 #include "UniqueString.h"
 
 #include <boost/noncopyable.hpp>
+#include <string>
+
 #include <stdint.h>
 #include <stdlib.h>
 
 class Object;
 
-struct Symbol : boost::noncopyable {
-
-	const uint32_t id;
-
-	const Object& object;
-	const UniqueString name;
-	const char* demangled_name;
-
-	const uint64_t cum_alloc;
+class Symbol : boost::noncopyable {
 
 	static uint32_t next_id;
 
-	Symbol(const Object& object, const UniqueString& name, const char* demangled_name) :
-		id(next_id++), object(object), name(name), demangled_name(demangled_name), cum_alloc(0U) {}
+public:
 
-	~Symbol() {
+	const Object& object;
+	const uint32_t id;
+	const uint64_t cum_alloc;
+
+	explicit Symbol(const Object& object) :
+		object(object), id(next_id++), cum_alloc(0U) {}
+
+	virtual ~Symbol() {}
+
+	virtual const char* get_name() const = 0;
+
+	static	uint32_t get_next_id() {
+		return next_id;
+	}
+};
+
+class NativeSymbol : public Symbol {
+
+	const UniqueString name;
+	const char* demangled_name;
+
+	const char* get_name() const {
+		return (demangled_name?demangled_name:name.c_str());
+	}
+
+public:
+
+	NativeSymbol(const Object& object, const UniqueString& name, const char* demangled_name) :
+		Symbol(object),
+		name(name),
+		demangled_name(demangled_name) {
+	}
+
+	~NativeSymbol() {
 		if (demangled_name) {
 			free(const_cast<char*>(demangled_name));
 		}
 	}
+};
+
+class PythonSymbol : public Symbol {
+
+	const std::string name;
 
 	const char* get_name() const {
+		return name.c_str();
+	}
 
-		return (demangled_name?demangled_name:name.c_str());
+public:
+
+	PythonSymbol(const Object& object, const std::string& name) :
+		Symbol(object),
+		name(name) {
 	}
 };
 
