@@ -140,6 +140,9 @@ typedef const void* (*get_backward_scan_termination_addr_fn_t)(const void*);
 
 
 static void walk_stack(frame_callback_fn callback, get_backward_scan_termination_addr_fn_t get_scan_end,
+	void* user_data) __attribute__((noinline));
+
+static void walk_stack(frame_callback_fn callback, get_backward_scan_termination_addr_fn_t get_scan_end,
 	void* user_data) {
 
 	/* grab current ra */
