@@ -42,6 +42,8 @@
 #include <link.h>			/* for dl_iterate_phdr() */
 #include <time.h>
 
+#include <unwind.h>
+
 static walk_python_stack_fn walk_python_stack = NULL;
 
 typedef void* (*malloc_fn)(size_t);
@@ -433,10 +435,15 @@ static const void* get_backward_scan_earliest_addr(const void* ra) {
 
 static int dump_frame(void* ra, void* user_data) {
 
+	fprintf(stderr, "Frame: 0x%llx\n", (uint64_t)ra);
+
 	size_t* num_frames = (size_t*)(user_data);
 
 	// Skip calls to our internal fns. Don't want these showing-up in callstack.
-	if (ra >= dumpalloc_seg_start && ra < dumpalloc_seg_end) return 1;
+	if (ra >= dumpalloc_seg_start && ra < dumpalloc_seg_end) {
+		fprintf(stderr, "Discarding frame\n");
+		return 1;
+	}
 
 	++(*num_frames);
 
@@ -467,6 +474,26 @@ static int dump_python_frame(const char* function, const char* source_file, cons
 }
 
 
+_Unwind_Reason_Code dump_unwind_frame(struct _Unwind_Context* ctx, void* user_data) {
+
+	size_t* num_frames = (size_t*)user_data;
+
+	void* ra = (void*)_Unwind_GetIP(ctx);
+
+	//fprintf(stderr, "Frame: 0x%lx\n", (uint32_t)ra);
+
+	// Skip calls to our internal fns. Don't want these showing-up in callstack.
+	if (ra >= dumpalloc_seg_start && ra < dumpalloc_seg_end) {
+		//fprintf(stderr, "Discarding frame: 0x%lx\n", ra);
+		return _URC_NO_REASON;
+	}
+
+	write_addr(writer, ra);
+	++(*num_frames);
+
+	return _URC_NO_REASON;
+}
+
 static void dump_alloc(void* addr, size_t size) {
 
 	//fprintf(stderr, "dump_alloc() 0x%lx, %lu\n", addr, size);
@@ -477,7 +504,8 @@ static void dump_alloc(void* addr, size_t size) {
 
 	size_t num_frames = 0;
 
-	walk_stack(&dump_frame, &get_backward_scan_earliest_addr, &num_frames);
+	//walk_stack(&dump_frame, &get_backward_scan_earliest_addr, &num_frames);
+	_Unwind_Backtrace(&dump_unwind_frame, &num_frames);
 
 	if (walk_python_stack) {
 		write_addr(writer, 1U);
@@ -623,6 +651,7 @@ static void init() {
 
 
 __attribute__((visibility("default")))
+__attribute__((noinline))
 void* dlopen(const char* name, int flag) {
 
 	INIT_ONCE;
@@ -640,6 +669,7 @@ void* dlopen(const char* name, int flag) {
 }
 
 __attribute__((visibility("default")))
+__attribute__((noinline))
 void* malloc(size_t size) {
 
 	INIT_ONCE;
@@ -655,10 +685,12 @@ void* malloc(size_t size) {
 	//
 	pthread_mutex_lock(&mutex);
 
+	++malloc_depth;
+
 	void* addr = real_malloc(size);
 
-	if ( ! malloc_depth++ ) {
-		
+	if ( malloc_depth == 1 ) {
+//	if ( ! malloc_depth++ ) {
 		dump_alloc(addr, size);
 	}
 
@@ -673,6 +705,7 @@ void* malloc(size_t size) {
 }
 
 __attribute__((visibility("default")))
+__attribute__((noinline))
 void free(void* ptr) {
 
 	if ( ! ptr) return;
@@ -685,7 +718,6 @@ void free(void* ptr) {
 	pthread_mutex_lock(&mutex);
 
 	if ( ! malloc_depth++ ) {
-		
 		dump_dealloc(ptr);
 	}
 
@@ -697,6 +729,7 @@ void free(void* ptr) {
 }
 
 __attribute__((visibility("default")))
+__attribute__((noinline))
 void* calloc(size_t nmemb, size_t size) {
 
 	INIT_ONCE;
@@ -726,6 +759,7 @@ void* calloc(size_t nmemb, size_t size) {
 }
 
 __attribute__((visibility("default")))
+__attribute__((noinline))
 void* realloc(void* ptr, size_t size) {
 
 	INIT_ONCE;
@@ -742,15 +776,12 @@ void* realloc(void* ptr, size_t size) {
 
 	if ( malloc_depth == 1 ) {
 
-		if ( addr ) {
+		if ( ptr && (addr || !size) ) {
+			dump_dealloc(ptr);
+		}
 
-			if ( ptr ) {
-				dump_dealloc(ptr);
-			}
-
-			if ( size ) {
-				dump_alloc(addr, size);
-			}
+		if ( addr && size ) {
+			dump_alloc(addr, size);
 		}
 	}
 

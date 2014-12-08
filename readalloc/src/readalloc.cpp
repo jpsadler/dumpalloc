@@ -120,7 +120,7 @@ static void print_stack(const CallStack& stack) {
 
 	BOOST_FOREACH(const CallSite* cs, stack) {
 
-		fprintf(stderr, "0x%llx, %s\n", cs->addr, cs->from_symbol.object.name.c_str());
+		fprintf(stderr, "0x%llx, %s %s\n", cs->addr, cs->from_symbol.get_name(), cs->from_symbol.object.name.c_str());
 		fflush(stderr);
 	}
 }
