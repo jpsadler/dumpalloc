@@ -240,9 +240,10 @@ typedef struct {
 static int check_next_lib(struct dl_phdr_info *info, size_t size, void* out) {
 
 	sym_info_t* syminfo = (sym_info_t*)out;
-
-	if ((uint32_t)info->dlpi_addr > (uint32_t)syminfo->addr) {
-
+/*
+	fprintf(stderr, "Checking lib: %s, lib addr: 0x%llx, fn addr: 0x%llx\n", info->dlpi_name, info->dlpi_addr, syminfo->addr);
+*/
+	if ((uint64_t)info->dlpi_addr > (uint64_t)syminfo->addr) {
 		// not the lib we're looking for, keep looking.
 		return 0;
 
@@ -254,7 +255,7 @@ static int check_next_lib(struct dl_phdr_info *info, size_t size, void* out) {
 		size_t h = 0;
 		for ( ; h < info->dlpi_phnum; ++h) {
 
-			void* seg_addr = (void*)((uint32_t)info->dlpi_addr + (uint32_t)info->dlpi_phdr[h].p_vaddr);
+			void* seg_addr = (void*)((uint64_t)info->dlpi_addr + (uint64_t)info->dlpi_phdr[h].p_vaddr);
 
 			if (syminfo->addr >= seg_addr && syminfo->addr < seg_addr+info->dlpi_phdr[h].p_memsz) {
 
@@ -265,8 +266,8 @@ static int check_next_lib(struct dl_phdr_info *info, size_t size, void* out) {
 				syminfo->seg_start_addr = seg_addr;
 				syminfo->seg_end_addr = seg_addr+info->dlpi_phdr[h].p_memsz;
 /*
-				fprintf(stderr, "pc: 0x%x seg virt addr: 0x%x lib base addr: 0x%x calc seg addr: 0x%x calc offset: 0x%x \nObject: %s \n", 
-					(uint32_t)syminfo->addr, (uint32_t)info->dlpi_phdr[h].p_vaddr, (uint32_t)info->dlpi_addr, (uint32_t)seg_addr, (uint32_t)syminfo->offset, info->dlpi_name);
+				fprintf(stderr, "pc: 0x%llx seg virt addr: 0x%llx lib base addr: 0x%llx calc seg addr: 0x%llx calc offset: 0x%llx \nObject: %s \n",
+					(uint64_t)syminfo->addr, (uint64_t)info->dlpi_phdr[h].p_vaddr, (uint64_t)info->dlpi_addr, (uint64_t)seg_addr, (uint64_t)syminfo->offset, info->dlpi_name);
 */
 				return 1;
 			}
@@ -480,11 +481,11 @@ _Unwind_Reason_Code dump_unwind_frame(struct _Unwind_Context* ctx, void* user_da
 
 	void* ra = (void*)_Unwind_GetIP(ctx);
 
-	//fprintf(stderr, "Frame: 0x%lx\n", (uint32_t)ra);
+	//fprintf(stderr, "Frame: 0x%llx\n", (uint64_t)ra);
 
 	// Skip calls to our internal fns. Don't want these showing-up in callstack.
 	if (ra >= dumpalloc_seg_start && ra < dumpalloc_seg_end) {
-		//fprintf(stderr, "Discarding frame: 0x%lx\n", ra);
+		//fprintf(stderr, "Discarding frame: 0x%llx\n", ra);
 		return _URC_NO_REASON;
 	}
 
@@ -696,7 +697,7 @@ void* malloc(size_t size) {
 
 	pthread_mutex_unlock(&mutex);
 
-	//fprintf(stderr, "malloc 0x%lx, %lu\n", (uint32_t)addr, size);
+	//fprintf(stderr, "malloc 0x%llx, %lu\n", (uint64_t)addr, size);
 //	fflush(stderr);
 
 	--malloc_depth;
@@ -712,7 +713,7 @@ void free(void* ptr) {
 
 	INIT_ONCE;
 
-	//fprintf(stderr, "free() : 0x%lx\n", (uint32_t)ptr);
+	//fprintf(stderr, "free() : 0x%llx\n", (uint64_t)ptr);
 	//fflush(stderr);
 
 	pthread_mutex_lock(&mutex);
@@ -749,7 +750,7 @@ void* calloc(size_t nmemb, size_t size) {
 		dump_alloc(addr, (nmemb * size));
 	}
 
-	//fprintf(stderr, "calloc() 0x%lx\n", (uint32_t)addr);
+	//fprintf(stderr, "calloc() 0x%llx\n", (uint64_t)addr);
 
 	pthread_mutex_unlock(&mutex);
 
@@ -785,7 +786,7 @@ void* realloc(void* ptr, size_t size) {
 		}
 	}
 
-	//fprintf(stderr, "realloc() 0x%lx\n", (uint32_t)addr);
+	//fprintf(stderr, "realloc() 0x%llx\n", (uint64_t)addr);
 
 	pthread_mutex_unlock(&mutex);
 
