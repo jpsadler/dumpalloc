@@ -20,6 +20,7 @@
 #include "../src/buffered-writer.h"
 
 #include <unistd.h>
+#include <stdint.h>
 
 
 const size_t write_buffer_capacity = 16U;
@@ -128,6 +129,33 @@ static int test_write_larger_than_fd_avail_space() {
 
 }
 
+static int test_flush_doesnt_write_bytes_if_nothing_to_flush() {
+
+	const size_t capacity = 8U;
+
+	buffered_writer* writer = buffered_writer_create(0, capacity);
+
+	writer->flush(writer);
+
+	if (written_bytes) {
+		fprintf(stderr, "Wasn't expecting flush() to write anything.\n");
+		return 1;
+	}
+
+	uint32_t anInt = 123;
+
+	writer->write(writer, &anInt, sizeof(anInt));
+
+	writer->flush(writer);
+
+	if (written_bytes > 4) {
+		fprintf(stderr, "flush() to wrote more bytes than expected.\n");
+		return 2;
+	}
+
+	return 0;
+}
+
 
 
 void setup() {
@@ -161,7 +189,8 @@ int main(int argc, const char* argv[]) {
 	a_test tests[] = {
 		TEST_FN (test_write_larger_than_buffer),
 		TEST_FN (test_write_smaller_than_buffer),
-		TEST_FN (test_write_larger_than_fd_avail_space)
+		TEST_FN (test_write_larger_than_fd_avail_space),
+		TEST_FN (test_flush_doesnt_write_bytes_if_nothing_to_flush)
 	};
 
 	const size_t num_tests = (sizeof(tests)/sizeof(a_test));
