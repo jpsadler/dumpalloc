@@ -536,8 +536,71 @@ static void init() {
 	pthread_mutex_lock(&mutex);
 
 	fprintf(stderr, "libdumpalloc: init()\n");
+	fflush(stderr);
 
 	++malloc_depth;
+
+	fprintf(stderr, "libdumpalloc: looking for calloc()...\n");
+	fflush(stderr);
+
+	real_calloc = (calloc_fn)dlsym(RTLD_NEXT, "calloc");
+
+	if (!real_calloc) {
+		fprintf(stderr, "libdumpalloc: Failed to find real calloc!\n");
+		fflush(stderr);
+		exit(1);
+	}
+
+	fprintf(stderr, "libdumpalloc: looking for malloc()...\n");
+	fflush(stderr);
+
+	real_malloc = (malloc_fn)dlsym(RTLD_NEXT, "malloc");
+
+	if (!real_malloc) {
+		fprintf(stderr, "libdumpalloc: Failed to find real malloc!\n");
+		fflush(stderr);
+		exit(1);
+	}
+
+	fprintf(stderr, "libdumpalloc: looking for free()...\n");
+	fflush(stderr);
+
+	real_free = (free_fn)dlsym(RTLD_NEXT, "free");
+
+	if (!real_free) {
+		fprintf(stderr, "libdumpalloc: Failed to find real free!\n");
+		fflush(stderr);
+		exit(1);
+	}
+
+	fprintf(stderr, "libdumpalloc: looking for realloc()...\n");
+	fflush(stderr);
+
+	real_realloc = (realloc_fn)dlsym(RTLD_NEXT, "realloc");
+
+	if (!real_realloc) {
+		fprintf(stderr, "libdumpalloc: Failed to find real realloc!\n");
+		fflush(stderr);
+		exit(1);
+	}
+
+	fprintf(stderr, "libdumpalloc: looking-up address of own malloc()...\n");
+	fflush(stderr);
+
+	sym_info_t malloc_sym_info;
+
+	if ( ! resolve_addr(&malloc_sym_info, &malloc) ) {
+
+		fprintf(stderr, "libdumpalloc: Failed to resolve address of my own malloc()!\n");
+		fflush(stderr);
+		exit(1);
+	}
+
+	dumpalloc_seg_start = malloc_sym_info.seg_start_addr;
+	dumpalloc_seg_end = malloc_sym_info.seg_end_addr;
+
+	fprintf(stderr, "libdumpalloc: looking for dlopen()...\n");
+	fflush(stderr);
 
 	real_dlopen = (dlopen_fn)dlsym(RTLD_NEXT, "dlopen");
 
@@ -547,6 +610,7 @@ static void init() {
 	}
 
 	fprintf(stderr, "libdumpalloc: Looking for `walk_python_stack()`...\n");
+	fflush(stderr);
 
 	walk_python_stack = (walk_python_stack_fn)dlsym(NULL, "walk_python_stack");
 
@@ -558,49 +622,10 @@ static void init() {
 		fprintf(stderr, "libdumpalloc: Python backtracing is enabled.\n");
 	}
 
-
 	fflush(stderr);
 
-	real_malloc = (malloc_fn)dlsym(RTLD_NEXT, "malloc");
-
-	if (!real_malloc) {
-		fprintf(stderr, "libdumpalloc: Failed to find real malloc!\n");
-		exit(1);
-	}
-
-	real_free = (free_fn)dlsym(RTLD_NEXT, "free");
-
-	if (!real_free) {
-		fprintf(stderr, "libdumpalloc: Failed to find real free!\n");
-		exit(1);
-	}
-
-	real_calloc = (calloc_fn)dlsym(RTLD_NEXT, "calloc");
-
-	if (!real_calloc) {
-		fprintf(stderr, "libdumpalloc: Failed to find real calloc!\n");
-		exit(1);
-	}
-
-	real_realloc = (realloc_fn)dlsym(RTLD_NEXT, "realloc");
-
-	if (!real_realloc) {
-		fprintf(stderr, "libdumpalloc: Failed to find real realloc!\n");
-		exit(1);
-	}
-
-	sym_info_t malloc_sym_info;
-
-	if ( ! resolve_addr(&malloc_sym_info, &malloc) ) {
-
-		fprintf(stderr, "libdumpalloc: Failed to resolve address of my own malloc()!\n");
-		exit(1);
-	}
-
-	dumpalloc_seg_start = malloc_sym_info.seg_start_addr;
-	dumpalloc_seg_end = malloc_sym_info.seg_end_addr;
-
 	fprintf(stderr, "libdumpalloc: Loaded libs: \n");
+	fflush(stderr);
 
 	print_loaded_libs();
 
@@ -641,7 +666,6 @@ static void init() {
 	dump_new_objects();
 
 	fprintf(stderr, "libdumpalloc: init() done.\n");
-
 	fflush(stderr);
 
 	--malloc_depth;
@@ -742,13 +766,19 @@ void* calloc(size_t nmemb, size_t size) {
 
 	//fprintf(stderr, "calloc()\n");
 //	fflush(stderr);
-	
+
 	pthread_mutex_lock(&mutex);
 
 	// implementation may call malloc()
 	++malloc_depth;
 
-	void* addr = real_calloc(nmemb, size);
+	void* addr = NULL;
+
+	if (!real_calloc) {
+		fprintf(stderr, "Real calloc() is NULL!\n");
+	} else {
+		addr = real_calloc(nmemb, size);
+	}
 
 	if ( malloc_depth == 1 ) {
 
