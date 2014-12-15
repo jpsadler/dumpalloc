@@ -616,14 +616,19 @@ static void init() {
 
 		if (output_file) {
 
-			if ((dump_fd = open(output_file, (O_CREAT | O_TRUNC | O_WRONLY))) == -1) {
+			if ((dump_fd = open(output_file, (O_CREAT | O_TRUNC | O_WRONLY), (S_IRUSR|S_IWUSR))) == -1) {
 				fprintf(stderr, "libdumpalloc: Failed to open output file for writing: %s\n", output_file);
+				fflush(stderr);
 				exit(1);
 			}
+
 		} else {
+
 			fprintf(stderr, "libdumpalloc: Error! you must set one of the environment variables: 'DUMPALLOC_SERVER' or "
 				"'DUMPALLOC_FILE' to get any output!\n");
+			fflush(stderr);
 			exit(1);
+
 		}
 	}
 
