@@ -800,3 +800,16 @@ void* realloc(void* ptr, size_t size) {
 	return addr;
 }
 
+__attribute__((destructor))
+static void cleanup() {
+
+	fprintf(stderr, "libdumpalloc: cleanup()\n");
+
+	if (writer) {
+		buffered_writer* tmp = writer;
+		writer = NULL;
+		tmp->flush(tmp);
+		fprintf(stderr, "Destroying writer. Written bytes: %zd, Flushed bytes: %zd.\n", tmp->total_requested, tmp->total_written);
+		tmp->destroy(tmp);
+	}
+}
