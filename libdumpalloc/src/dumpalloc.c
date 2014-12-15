@@ -89,6 +89,8 @@ static buffered_writer* writer = NULL;
 static void* dumpalloc_seg_start = NULL;
 static void* dumpalloc_seg_end = NULL;
 
+static char the_executable[4096];
+
 
 static void on_failed_write(buffered_writer* writer, int ret, int error) {
 
@@ -262,7 +264,22 @@ static int check_next_lib(struct dl_phdr_info *info, size_t size, void* out) {
 				// by jingo, I think we've found it!
 				syminfo->offset = (void*)(info->dlpi_phdr[h].p_vaddr + (syminfo->addr - seg_addr));
 
-				syminfo->object = info->dlpi_name;
+				if (info->dlpi_name == NULL || info->dlpi_name[0] == 0) {
+
+					if (info->dlpi_addr == 0) {
+						// Probably the main executable.
+						// Surprisingly, glibc doesn't give the name in this case, although
+						// uClibC seems to manage!
+						syminfo->object = the_executable;
+					} else {
+						// It's probably the virtual shared-object: linux-vdso.so
+						syminfo->object = "??";
+					}
+
+				} else {
+					syminfo->object = info->dlpi_name;
+				}
+
 				syminfo->seg_start_addr = seg_addr;
 				syminfo->seg_end_addr = seg_addr+info->dlpi_phdr[h].p_memsz;
 /*
@@ -366,7 +383,17 @@ static const known_object_t* add_object(struct dl_phdr_info *info) {
 					(num_known_objects-lower_bound)*sizeof(known_object_t));
 			}
 
-			known_object_t obj = { (const void*)seg_start, (const void*)seg_end, info->dlpi_name };
+			const char* name = info->dlpi_name;
+
+			if (name == NULL || name[0] == 0) {
+				if (info->dlpi_addr == 0) {
+					name = the_executable;
+				} else {
+					name = "??";
+				}
+			}
+
+			known_object_t obj = { (const void*)seg_start, (const void*)seg_end, name };
 
 			known_objects[lower_bound] = obj;
 
@@ -394,13 +421,28 @@ static int dump_object(void* const base_addr, const char* const name) {
 
 static int dump_object_if_new(struct dl_phdr_info *info, size_t size, void* out) {
 
-	//if ( add_object((void*)info->dlpi_addr) ) {
-
 	const known_object_t* added = add_object(info);
 
 	if ( added ) {
-//		return dump_object((void*)added->start, info->dlpi_name);
-		return dump_object((void*)info->dlpi_addr, info->dlpi_name);
+
+		const char* name = info->dlpi_name;
+
+		if (name == NULL || name[0] == 0) {
+
+			if (info->dlpi_addr == 0) {
+				name = the_executable;
+			} else {
+				name = "??";
+			}
+
+		// `readalloc` will want absolute paths.
+		} else if (name[0] != '/') {
+			char tmp[4096];
+			realpath(name, tmp);
+			name = tmp;
+		}
+
+		return dump_object((void*)info->dlpi_addr, name);
 	}
 
 	return 0;
@@ -530,6 +572,24 @@ static void dump_dealloc(void* addr) {
 	writer->flush(writer);
 }
 
+static void get_executable_name(char* buffer, size_t buffer_len) {
+
+	pid_t pid = getpid();
+
+	bzero(buffer, buffer_len);
+
+	char tmp[32];
+
+	snprintf(tmp, sizeof(tmp), "/proc/%lu/exe", pid);
+
+	fprintf(stderr, "get_executable_name() resolving: %s\n", tmp);
+
+	realpath(tmp, buffer);
+
+	fprintf(stderr, "get_executable_name() resolved to: %s\n", buffer);
+}
+
+
 //__attribute__((constructor(1000)))
 static void init() {
 
@@ -550,6 +610,8 @@ static void init() {
 		fflush(stderr);
 		exit(1);
 	}
+
+	get_executable_name(the_executable, sizeof(the_executable));
 
 	fprintf(stderr, "libdumpalloc: looking for malloc()...\n");
 	fflush(stderr);
