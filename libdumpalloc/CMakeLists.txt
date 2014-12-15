@@ -20,8 +20,6 @@
 cmake_minimum_required ( VERSION 2.6 ) 
 project ( DUMPALLOC )
 
-if (CMAKE_CROSSCOMPILING)
-
 find_package(PythonLibs)
 
 set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_GNU_SOURCE=1 -O2 -fvisibility=hidden -ftls-model=initial-exec -fPIC -pthread -fasynchronous-unwind-tables" )
@@ -39,10 +37,9 @@ endif()
 
 add_subdirectory ( manual-test-programs )
 
+if (CMAKE_CROSSCOMPILING)
 else()
-
 add_subdirectory ( tests )
-
 endif()
 
 
