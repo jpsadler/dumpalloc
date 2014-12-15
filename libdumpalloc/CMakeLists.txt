@@ -25,7 +25,7 @@ if (CMAKE_CROSSCOMPILING)
 find_package(PythonLibs)
 
 set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_GNU_SOURCE=1 -O2 -fvisibility=hidden -ftls-model=initial-exec -fPIC -pthread -fasynchronous-unwind-tables" )
-set( CMAKE_SHARED_LINKER_FLAGS $ENV{LDFLAGS} "-pthread -Wl,-no-as-needed -shared -lrt" )
+set( CMAKE_SHARED_LINKER_FLAGS $ENV{LDFLAGS} "-pthread -Wl,-no-as-needed -shared -lrt -ldl" )
 add_library ( dumpalloc SHARED src/dumpalloc.c )
 
 # Only build the Python support if Python libs are available. It's a relatively-heavy
