@@ -749,6 +749,9 @@ void* dlopen(const char* name, int flag) {
 	INIT_ONCE;
 
 	fprintf(stderr, "dlopen() %s\n", name);
+	if ( ! writer ) {
+		return real_dlopen(name, flag);
+	}
 	pthread_mutex_lock(&mutex);
 
 	void* ret = real_dlopen(name, flag);
@@ -768,6 +771,9 @@ void* malloc(size_t size) {
 
 	//fprintf(stderr, "malloc()\n");
 //	fflush(stderr);
+	if ( ! writer ) {
+		return real_malloc(size);
+	}
 
 	// N.B. I hold the mutex across the actual allocation and deallocation as well as the dump
 	// since it is possible that another thread could re-alloc at the same address before a free()
@@ -804,6 +810,10 @@ void free(void* ptr) {
 
 	INIT_ONCE;
 
+	if ( ! writer ) {
+		return real_free(ptr);
+	}
+
 	//fprintf(stderr, "free() : 0x%llx\n", (uint64_t)ptr);
 	//fflush(stderr);
 
@@ -828,6 +838,13 @@ void* calloc(size_t nmemb, size_t size) {
 
 	//fprintf(stderr, "calloc()\n");
 //	fflush(stderr);
+	if ( ! writer ) {
+		if ( real_calloc ) {
+			return real_calloc(nmemb, size);
+		} else {
+			return NULL;
+		}
+	}
 
 	pthread_mutex_lock(&mutex);
 
@@ -864,6 +881,9 @@ void* realloc(void* ptr, size_t size) {
 
 	//fprintf(stderr, "realloc()\n");
 //	fflush(stderr);
+	if ( ! writer ) {
+		return real_realloc(ptr, size);
+	}
 
 	pthread_mutex_lock(&mutex);
 
