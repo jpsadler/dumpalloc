@@ -551,7 +551,7 @@ static void dump_alloc(void* addr, size_t size) {
 	_Unwind_Backtrace(&dump_unwind_frame, &num_frames);
 
 	if (walk_python_stack) {
-		write_addr(writer, 1U);
+		write_addr(writer, (void*)1U);
 		walk_python_stack(&dump_python_frame);
 		write_uint32(writer, 0U);
 	}
