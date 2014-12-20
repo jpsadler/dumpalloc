@@ -40,6 +40,8 @@ typedef struct _buffered_writer {
 	size_t capacity;
 	size_t write_idx;
 	size_t read_idx;
+	size_t total_requested;
+	size_t total_written;
 
 	write_fn write;
 	flush_fn flush;
@@ -56,6 +58,7 @@ static void buffered_writer_destroy(buffered_writer* writer) {
 		free(writer->buffer);
 	}
 
+	close(writer->fd);
 	free(writer);
 }
 
@@ -65,6 +68,8 @@ static ssize_t min(const ssize_t a, const ssize_t b) {
 }
 
 static ssize_t buffered_writer_write(buffered_writer* writer, const void* bytes, const size_t count) {
+
+	writer->total_requested += count;
 
 	ssize_t total_written = 0;
 
@@ -104,6 +109,7 @@ static ssize_t buffered_writer_flush(buffered_writer* writer) {
 		(writer->write_idx - writer->read_idx))) > 0) {
 
 		writer->read_idx += bytes_written;
+		writer->total_written += bytes_written;
 	}
 
 	if (bytes_written > 0) {
@@ -122,6 +128,7 @@ static buffered_writer* buffered_writer_create(const int fd, const size_t capaci
 	writer->buffer = (char*)malloc(capacity);
 	writer->write_idx = 0;
 	writer->read_idx = 0;
+	writer->total_written = 0;
 	writer->write = &buffered_writer_write;
 	writer->flush = &buffered_writer_flush;
 	writer->destroy = &buffered_writer_destroy;
