@@ -44,6 +44,12 @@
 
 #include <unwind.h>
 
+//#define TRACE_MSG(...) fprintf(stderr, "libdumpalloc [TRACE]: "__VA_ARGS__); fflush(stderr);
+#define TRACE_MSG(...)
+#define INFO_MSG(...)  fprintf(stderr, "libdumpalloc [INFO] : "__VA_ARGS__); fflush(stderr);
+#define ERROR_MSG(...) fprintf(stderr, "libdumpalloc [ERROR]: "__VA_ARGS__); fflush(stderr);
+
+
 static walk_python_stack_fn walk_python_stack = NULL;
 
 typedef void* (*malloc_fn)(size_t);
@@ -91,12 +97,10 @@ static void* dumpalloc_seg_end = NULL;
 
 static char the_executable[4096];
 
-
 static void on_failed_write(buffered_writer* writer, int ret, int error) {
 
-	fprintf(stderr, "Failed to write to fd (ret: %d, errno: %d).\nQuitting...\n",
+	ERROR_MSG("Failed to write to fd (ret: %d, errno: %d).\nQuitting...\n",
 		ret, error);
-
 	exit(1);
 }
 
@@ -109,7 +113,7 @@ static void open_socket(char* server_host_port) {
 
 	if (server_host_port[i] != ':') {
 
-		fprintf(stderr, "Error! failed to parse server and port from DUMPALLOC_SERVER env var!\n");
+		ERROR_MSG("Error! failed to parse server and port from DUMPALLOC_SERVER env var!\n");
 		exit(1);
 	}
 	
@@ -117,7 +121,7 @@ static void open_socket(char* server_host_port) {
 
 	int port = atoi(server_host_port+i+1);
 
-	fprintf(stderr, "host: %s, port: %d\n", server_host_port, port);
+	INFO_MSG("host: %s, port: %d\n", server_host_port, port);
 
 	int sockfd;
 	struct sockaddr_in serv_addr;
@@ -130,11 +134,11 @@ static void open_socket(char* server_host_port) {
 		exit(1);
 	}
 
-	fprintf(stderr, "looking-up host...\n");
+	TRACE_MSG("looking-up host...\n");
 	server = gethostbyname(server_host_port);
 
 	if (server == NULL) {
-		fprintf(stderr,"ERROR, no such host: %s\n", server_host_port);
+		ERROR_MSG("ERROR, no such host: %s\n", server_host_port);
 		exit(1);
 	}
 
@@ -146,7 +150,7 @@ static void open_socket(char* server_host_port) {
 
 	serv_addr.sin_port = htons(port);
 
-	fprintf(stderr, "connecting...\n");
+	INFO_MSG("connecting...\n");
 
 	/* Now connect to the server */
 	if (connect(sockfd,&serv_addr,sizeof(serv_addr)) < 0) {
@@ -154,7 +158,7 @@ static void open_socket(char* server_host_port) {
 		exit(1);
 	}
 
-	fprintf(stderr, "done.\n");
+	INFO_MSG("done.\n");
 	dump_fd = sockfd;
 }
 
@@ -224,6 +228,8 @@ static void dump_header() {
 	write_uint32(writer, len);
 
 	writer->write(writer, buffer, len);
+
+	TRACE_MSG("dump_header(): %zd\n", len+4+8+4+4);
 }
 
 
@@ -243,7 +249,7 @@ static int check_next_lib(struct dl_phdr_info *info, size_t size, void* out) {
 
 	sym_info_t* syminfo = (sym_info_t*)out;
 /*
-	fprintf(stderr, "Checking lib: %s, lib addr: 0x%llx, fn addr: 0x%llx\n", info->dlpi_name, info->dlpi_addr, syminfo->addr);
+	TRACE_MSG("Checking lib: %s, lib addr: 0x%llx, fn addr: 0x%llx\n", info->dlpi_name, info->dlpi_addr, syminfo->addr);
 */
 	if ((uint64_t)info->dlpi_addr > (uint64_t)syminfo->addr) {
 		// not the lib we're looking for, keep looking.
@@ -283,7 +289,7 @@ static int check_next_lib(struct dl_phdr_info *info, size_t size, void* out) {
 				syminfo->seg_start_addr = seg_addr;
 				syminfo->seg_end_addr = seg_addr+info->dlpi_phdr[h].p_memsz;
 /*
-				fprintf(stderr, "pc: 0x%llx seg virt addr: 0x%llx lib base addr: 0x%llx calc seg addr: 0x%llx calc offset: 0x%llx \nObject: %s \n",
+				TRACE_MSG("pc: 0x%llx seg virt addr: 0x%llx lib base addr: 0x%llx calc seg addr: 0x%llx calc offset: 0x%llx \nObject: %s \n",
 					(uint64_t)syminfo->addr, (uint64_t)info->dlpi_phdr[h].p_vaddr, (uint64_t)info->dlpi_addr, (uint64_t)seg_addr, (uint64_t)syminfo->offset, info->dlpi_name);
 */
 				return 1;
@@ -296,7 +302,7 @@ static int check_next_lib(struct dl_phdr_info *info, size_t size, void* out) {
 
 static int print_lib(struct dl_phdr_info *info, size_t size, void* out) {
 	
-	fprintf(stderr, "Lib: %s\n", info->dlpi_name);
+	INFO_MSG("Lib: %s\n", info->dlpi_name);
 
 	return 0;
 }
@@ -370,7 +376,7 @@ static const known_object_t* add_object(struct dl_phdr_info *info) {
 				known_object_t* new_known_objects = realloc(known_objects, sizeof(known_object_t)*new_capacity);
 
 				if ( ! new_known_objects ) {
-					fprintf(stderr, "Failed to reallocate known_objects!\n");
+					ERROR_MSG("Failed to reallocate known_objects!\n");
 					exit(1);
 				}
 
@@ -415,6 +421,8 @@ static int dump_object(void* const base_addr, const char* const name) {
 	const uint32_t len = strlen(name);
 	write_uint32(writer, len);
 	writer->write(writer, name, len);
+
+	TRACE_MSG("dump_object(): %zd\n", (len+4+8+8+4));
 
 	return 0;
 }
@@ -478,13 +486,13 @@ static const void* get_backward_scan_earliest_addr(const void* ra) {
 
 static int dump_frame(void* ra, void* user_data) {
 
-	fprintf(stderr, "Frame: 0x%llx\n", (uint64_t)ra);
+	TRACE_MSG("Frame: 0x%llx\n", (uint64_t)ra);
 
 	size_t* num_frames = (size_t*)(user_data);
 
 	// Skip calls to our internal fns. Don't want these showing-up in callstack.
 	if (ra >= dumpalloc_seg_start && ra < dumpalloc_seg_end) {
-		fprintf(stderr, "Discarding frame\n");
+		TRACE_MSG("Discarding frame\n");
 		return 1;
 	}
 
@@ -523,23 +531,26 @@ _Unwind_Reason_Code dump_unwind_frame(struct _Unwind_Context* ctx, void* user_da
 
 	void* ra = (void*)_Unwind_GetIP(ctx);
 
-	//fprintf(stderr, "Frame: 0x%llx\n", (uint64_t)ra);
+	TRACE_MSG("Frame: 0x%llx\n", (uint64_t)ra);
 
 	// Skip calls to our internal fns. Don't want these showing-up in callstack.
 	if (ra >= dumpalloc_seg_start && ra < dumpalloc_seg_end) {
-		//fprintf(stderr, "Discarding frame: 0x%llx\n", ra);
+		TRACE_MSG("Discarding frame: 0x%llx\n", ra);
 		return _URC_NO_REASON;
 	}
 
 	write_addr(writer, ra);
 	++(*num_frames);
 
+	TRACE_MSG("dump_unwind_frame(): %zd\n", 8);
+
 	return _URC_NO_REASON;
 }
 
 static void dump_alloc(void* addr, size_t size) {
 
-	//fprintf(stderr, "dump_alloc() 0x%lx, %lu\n", addr, size);
+	TRACE_MSG("dump_alloc() 0x%lx, %lu\n", addr, size);
+
 	write_int32(writer, record_type_alloc);
 	write_uint64(writer, getTimestamp());
 	write_addr(writer, addr);
@@ -560,16 +571,21 @@ static void dump_alloc(void* addr, size_t size) {
 	write_addr(writer, 0U);
 
 	writer->flush(writer);
+
+	TRACE_MSG("dump_alloc(): %zd\n", (4+8+8+4+8));
 }
 
 static void dump_dealloc(void* addr) {
 
-	//fprintf(stderr, "dump_dealloc() 0x%lx\n", addr);
+	TRACE_MSG("dump_dealloc() 0x%lx\n", addr);
+
 	write_int32(writer, record_type_dealloc);
 	write_uint64(writer, getTimestamp());
 	write_addr(writer, addr);
 
 	writer->flush(writer);
+
+	TRACE_MSG("dump_dealloc(): %zd\n", (4+8+8));
 }
 
 static void get_executable_name(char* buffer, size_t buffer_len) {
@@ -582,11 +598,11 @@ static void get_executable_name(char* buffer, size_t buffer_len) {
 
 	snprintf(tmp, sizeof(tmp), "/proc/%lu/exe", pid);
 
-	fprintf(stderr, "get_executable_name() resolving: %s\n", tmp);
+	TRACE_MSG("get_executable_name() resolving: %s\n", tmp);
 
 	realpath(tmp, buffer);
 
-	fprintf(stderr, "get_executable_name() resolved to: %s\n", buffer);
+	TRACE_MSG("get_executable_name() resolved to: %s\n", buffer);
 }
 
 
@@ -595,99 +611,83 @@ static void init() {
 
 	pthread_mutex_lock(&mutex);
 
-	fprintf(stderr, "libdumpalloc: init()\n");
-	fflush(stderr);
+	TRACE_MSG("init()\n");
 
 	++malloc_depth;
 
-	fprintf(stderr, "libdumpalloc: looking for calloc()...\n");
-	fflush(stderr);
+	TRACE_MSG("looking for calloc()...\n");
 
 	real_calloc = (calloc_fn)dlsym(RTLD_NEXT, "calloc");
 
 	if (!real_calloc) {
-		fprintf(stderr, "libdumpalloc: Failed to find real calloc!\n");
-		fflush(stderr);
+		ERROR_MSG("Failed to find real calloc!\n");
 		exit(1);
 	}
 
 	get_executable_name(the_executable, sizeof(the_executable));
 
-	fprintf(stderr, "libdumpalloc: looking for malloc()...\n");
-	fflush(stderr);
+	TRACE_MSG("looking for malloc()...\n");
 
 	real_malloc = (malloc_fn)dlsym(RTLD_NEXT, "malloc");
 
 	if (!real_malloc) {
-		fprintf(stderr, "libdumpalloc: Failed to find real malloc!\n");
-		fflush(stderr);
+		ERROR_MSG("Failed to find real malloc!\n");
 		exit(1);
 	}
 
-	fprintf(stderr, "libdumpalloc: looking for free()...\n");
-	fflush(stderr);
+	TRACE_MSG("looking for free()...\n");
 
 	real_free = (free_fn)dlsym(RTLD_NEXT, "free");
 
 	if (!real_free) {
-		fprintf(stderr, "libdumpalloc: Failed to find real free!\n");
-		fflush(stderr);
+		ERROR_MSG("Failed to find real free!\n");
 		exit(1);
 	}
 
-	fprintf(stderr, "libdumpalloc: looking for realloc()...\n");
-	fflush(stderr);
+	TRACE_MSG("looking for realloc()...\n");
 
 	real_realloc = (realloc_fn)dlsym(RTLD_NEXT, "realloc");
 
 	if (!real_realloc) {
-		fprintf(stderr, "libdumpalloc: Failed to find real realloc!\n");
-		fflush(stderr);
+		ERROR_MSG("Failed to find real realloc!\n");
 		exit(1);
 	}
 
-	fprintf(stderr, "libdumpalloc: looking-up address of own malloc()...\n");
-	fflush(stderr);
+	TRACE_MSG("looking-up address of own malloc()...\n");
 
 	sym_info_t malloc_sym_info;
 
 	if ( ! resolve_addr(&malloc_sym_info, &malloc) ) {
 
-		fprintf(stderr, "libdumpalloc: Failed to resolve address of my own malloc()!\n");
-		fflush(stderr);
+		ERROR_MSG("Failed to resolve address of my own malloc()!\n");
 		exit(1);
 	}
 
 	dumpalloc_seg_start = malloc_sym_info.seg_start_addr;
 	dumpalloc_seg_end = malloc_sym_info.seg_end_addr;
 
-	fprintf(stderr, "libdumpalloc: looking for dlopen()...\n");
-	fflush(stderr);
+	TRACE_MSG("looking for dlopen()...\n");
 
 	real_dlopen = (dlopen_fn)dlsym(RTLD_NEXT, "dlopen");
 
 	if (!real_dlopen) {
-		fprintf(stderr, "libdumpalloc: Failed to find real `dlopen()`!\n");
+		ERROR_MSG("Failed to find real `dlopen()`!\n");
 		exit(1);
 	}
 
-	fprintf(stderr, "libdumpalloc: Looking for `walk_python_stack()`...\n");
-	fflush(stderr);
+	TRACE_MSG("Looking for `walk_python_stack()`...\n");
 
 	walk_python_stack = (walk_python_stack_fn)dlsym(NULL, "walk_python_stack");
 
 	if ( ! walk_python_stack ) {
 
-		fprintf(stderr, "libdumpalloc: Failed to find `walk_python_stack()`. "
+		INFO_MSG("Failed to find `walk_python_stack()`. "
 			"Python backtracing will be disabled.\n");
 	} else {
-		fprintf(stderr, "libdumpalloc: Python backtracing is enabled.\n");
+		INFO_MSG("Python backtracing is enabled.\n");
 	}
 
-	fflush(stderr);
-
-	fprintf(stderr, "libdumpalloc: Loaded libs: \n");
-	fflush(stderr);
+	INFO_MSG("Loaded libs: \n");
 
 	print_loaded_libs();
 
@@ -704,16 +704,14 @@ static void init() {
 		if (output_file) {
 
 			if ((dump_fd = open(output_file, (O_CREAT | O_TRUNC | O_WRONLY), (S_IRUSR|S_IWUSR))) == -1) {
-				fprintf(stderr, "libdumpalloc: Failed to open output file for writing: %s\n", output_file);
-				fflush(stderr);
+				ERROR_MSG("Failed to open output file for writing: %s\n", output_file);
 				exit(1);
 			}
 
 		} else {
 
-			fprintf(stderr, "libdumpalloc: Error! you must set one of the environment variables: 'DUMPALLOC_SERVER' or "
+			ERROR_MSG("Error! you must set one of the environment variables: 'DUMPALLOC_SERVER' or "
 				"'DUMPALLOC_FILE' to get any output!\n");
-			fflush(stderr);
 			exit(1);
 
 		}
@@ -723,12 +721,13 @@ static void init() {
 
 	writer->on_error = &on_failed_write;
 
+	TRACE_MSG("Dumping header...\n");
 	dump_header();
 
+	TRACE_MSG("Dumping objects...\n");
 	dump_new_objects();
 
-	fprintf(stderr, "libdumpalloc: init() done.\n");
-	fflush(stderr);
+	TRACE_MSG("init() done.\n");
 
 	--malloc_depth;
 
@@ -748,10 +747,12 @@ void* dlopen(const char* name, int flag) {
 
 	INIT_ONCE;
 
-	fprintf(stderr, "dlopen() %s\n", name);
+	TRACE_MSG("dlopen() %s\n", name);
+
 	if ( ! writer ) {
 		return real_dlopen(name, flag);
 	}
+
 	pthread_mutex_lock(&mutex);
 
 	void* ret = real_dlopen(name, flag);
@@ -769,8 +770,8 @@ void* malloc(size_t size) {
 
 	INIT_ONCE;
 
-	//fprintf(stderr, "malloc()\n");
-//	fflush(stderr);
+	TRACE_MSG("malloc(%zd)\n", size);
+
 	if ( ! writer ) {
 		return real_malloc(size);
 	}
@@ -788,14 +789,13 @@ void* malloc(size_t size) {
 	void* addr = real_malloc(size);
 
 	if ( malloc_depth == 1 ) {
-//	if ( ! malloc_depth++ ) {
+		TRACE_MSG("Dumping malloc()...\n");
 		dump_alloc(addr, size);
+	} else {
+		TRACE_MSG("Not dumping malloc. Depth is: %lu\n", malloc_depth);
 	}
 
 	pthread_mutex_unlock(&mutex);
-
-	//fprintf(stderr, "malloc 0x%llx, %lu\n", (uint64_t)addr, size);
-//	fflush(stderr);
 
 	--malloc_depth;
 
@@ -814,8 +814,7 @@ void free(void* ptr) {
 		return real_free(ptr);
 	}
 
-	//fprintf(stderr, "free() : 0x%llx\n", (uint64_t)ptr);
-	//fflush(stderr);
+	TRACE_MSG("free() : 0x%llx\n", (uint64_t)ptr);
 
 	pthread_mutex_lock(&mutex);
 
@@ -836,8 +835,8 @@ void* calloc(size_t nmemb, size_t size) {
 
 	INIT_ONCE;
 
-	//fprintf(stderr, "calloc()\n");
-//	fflush(stderr);
+	TRACE_MSG("calloc()\n");
+
 	if ( ! writer ) {
 		if ( real_calloc ) {
 			return real_calloc(nmemb, size);
@@ -854,7 +853,7 @@ void* calloc(size_t nmemb, size_t size) {
 	void* addr = NULL;
 
 	if (!real_calloc) {
-		fprintf(stderr, "Real calloc() is NULL!\n");
+		TRACE_MSG("Real calloc() is NULL!\n");
 	} else {
 		addr = real_calloc(nmemb, size);
 	}
@@ -864,7 +863,7 @@ void* calloc(size_t nmemb, size_t size) {
 		dump_alloc(addr, (nmemb * size));
 	}
 
-	//fprintf(stderr, "calloc() 0x%llx\n", (uint64_t)addr);
+	TRACE_MSG("calloc() 0x%llx\n", (uint64_t)addr);
 
 	pthread_mutex_unlock(&mutex);
 
@@ -879,8 +878,8 @@ void* realloc(void* ptr, size_t size) {
 
 	INIT_ONCE;
 
-	//fprintf(stderr, "realloc()\n");
-//	fflush(stderr);
+	TRACE_MSG("realloc()\n");
+
 	if ( ! writer ) {
 		return real_realloc(ptr, size);
 	}
@@ -903,7 +902,7 @@ void* realloc(void* ptr, size_t size) {
 		}
 	}
 
-	//fprintf(stderr, "realloc() 0x%llx\n", (uint64_t)addr);
+	TRACE_MSG("realloc() 0x%llx\n", (uint64_t)addr);
 
 	pthread_mutex_unlock(&mutex);
 
@@ -915,13 +914,15 @@ void* realloc(void* ptr, size_t size) {
 __attribute__((destructor))
 static void cleanup() {
 
-	fprintf(stderr, "libdumpalloc: cleanup()\n");
+	TRACE_MSG("cleanup()\n");
 
 	if (writer) {
 		buffered_writer* tmp = writer;
 		writer = NULL;
 		tmp->flush(tmp);
-		fprintf(stderr, "Destroying writer. Written bytes: %zd, Flushed bytes: %zd.\n", tmp->total_requested, tmp->total_written);
+		TRACE_MSG("Destroying writer. Written bytes: %zd, Flushed bytes: %zd.\n", tmp->total_requested, tmp->total_written);
 		tmp->destroy(tmp);
 	}
 }
+
+
