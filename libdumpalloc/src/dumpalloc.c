@@ -72,6 +72,16 @@ typedef void* (*dlopen_fn)(const char*, int);
 
 static dlopen_fn real_dlopen = NULL;
 
+
+typedef void* (*PyObject_Malloc_fn)(size_t);
+
+static PyObject_Malloc_fn real_PyObject_Malloc = NULL;
+
+typedef void (*PyObject_Free_fn)(void*);
+
+static PyObject_Free_fn real_PyObject_Free = NULL;
+
+
 static uint32_t inited = 0;
 
 static __thread size_t malloc_depth = 0;
@@ -653,6 +663,23 @@ static void init() {
 		exit(1);
 	}
 
+
+	TRACE_MSG("looking for PyObject_Malloc()...\n");
+
+	real_PyObject_Malloc = (PyObject_Malloc_fn)dlsym(RTLD_NEXT, "PyObject_Malloc");
+
+	if (!real_PyObject_Malloc) {
+
+		INFO_MSG("Didn't find PyObject_Malloc(). OK, probably not running with Python.\n");
+	}
+
+	real_PyObject_Free = (PyObject_Free_fn)dlsym(RTLD_NEXT, "PyObject_Free");
+
+	if (!real_PyObject_Free) {
+
+		INFO_MSG("Didn't find PyObject_Free(). OK, probably not running with Python.\n");
+	}
+
 	TRACE_MSG("looking-up address of own malloc()...\n");
 
 	sym_info_t malloc_sym_info;
@@ -910,6 +937,77 @@ void* realloc(void* ptr, size_t size) {
 	
 	return addr;
 }
+
+__attribute__((visibility("default")))
+__attribute__((noinline))
+void* PyObject_Malloc(size_t size) {
+
+	INIT_ONCE;
+
+	TRACE_MSG("PyObject_Malloc(%zd)\n", size);
+
+	if ( ! writer ) {
+		return real_PyObject_Malloc(size);
+	}
+
+	// N.B. I hold the mutex across the actual allocation and deallocation as well as the dump
+	// since it is possible that another thread could re-alloc at the same address before a free()
+	// can be recorded (which would confuse the reader).
+	//
+	// This is not ideal, but will do for now.
+	//
+	pthread_mutex_lock(&mutex);
+
+	++malloc_depth;
+
+	void* addr = real_PyObject_Malloc(size);
+
+	if ( malloc_depth == 1 ) {
+		TRACE_MSG("Dumping PyObject_Malloc()...\n");
+		dump_alloc(addr, size);
+	} else {
+		TRACE_MSG("Not dumping PyObject_Malloc. Depth is: %lu\n", malloc_depth);
+	}
+
+	pthread_mutex_unlock(&mutex);
+
+	--malloc_depth;
+
+	return addr;
+}
+
+
+__attribute__((visibility("default")))
+__attribute__((noinline))
+void PyObject_Free(void* ptr) {
+
+	if ( ! ptr) return;
+
+	INIT_ONCE;
+
+	if ( ! writer ) {
+		return real_PyObject_Free(ptr);
+	}
+
+	TRACE_MSG("PyObject_Free() : 0x%llx\n", (uint64_t)ptr);
+
+	pthread_mutex_lock(&mutex);
+
+	if ( ! malloc_depth++ ) {
+		dump_dealloc(ptr);
+	}
+
+	real_PyObject_Free(ptr);
+
+	pthread_mutex_unlock(&mutex);
+
+	--malloc_depth;
+}
+
+
+
+// N.B. PyObject_Realloc is implemented in-terms-of either PyObject_Malloc() + PyObject_Free()
+// or realloc(), so we don't bother to interpose it.
 
 __attribute__((destructor))
 static void cleanup() {
