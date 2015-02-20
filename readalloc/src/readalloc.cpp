@@ -97,6 +97,31 @@ typedef boost::ptr_map<const std::string, SourceFile> source_file_map_t;
 
 static source_file_map_t known_source_files;
 
+
+struct Sample {
+
+	Sample() :
+		sample_time(0),
+		alloc_count(0),
+		total_cost(0) {
+	}
+
+	Sample(const uint64_t sample_time_, const uint64_t alloc_count_, const uint64_t total_cost_) :
+		sample_time(sample_time_),
+		alloc_count(alloc_count_),
+		total_cost(total_cost_) {
+	}
+
+	uint64_t sample_time;
+	uint64_t alloc_count;
+	uint64_t total_cost;
+};
+
+static std::vector<Sample> samples;
+
+uint32_t sample_interval_secs = 0;
+
+
 static SourceFile* lookup_or_create_sourcefile(const std::string& name) {
 
 	source_file_map_t::iterator i = known_source_files.lower_bound(name);
@@ -175,11 +200,29 @@ void apply_alloc_costs(const uint64_t starting_timestamp, const uint64_t ending_
 }
 
 
+static void update_samples(const uint64_t time_offset, const int32_t count_delta, const int32_t cost_delta) {
+
+	// First thing: let's work-out whether we need to create a new sample.
+	Sample& current_sample = samples.back();
+
+	if ((time_offset - current_sample.sample_time) > sample_interval_secs) {
+		const uint64_t new_sample_time = (time_offset / sample_interval_secs) * sample_interval_secs;
+		current_sample.sample_time = new_sample_time;
+		samples.push_back(Sample(new_sample_time, current_sample.alloc_count+count_delta, current_sample.total_cost+cost_delta));
+	} else {
+		current_sample.alloc_count += count_delta;
+		current_sample.total_cost += cost_delta;
+	}
+}
+
+
 static Alloc* add_alloc(const uint64_t alloc_time, const addr_t addr, const uint32_t size, CallStack& stack) {
 
 	std::auto_ptr<Alloc> alloc(new Alloc(alloc_time, addr, size, stack));
 	Alloc* raw = alloc.get();
 
+	int32_t count_delta = 1;
+	int32_t cost_delta = size;
 
 	typename alloc_map_t::iterator existing = known_allocs.find(addr);
 
@@ -188,6 +231,11 @@ static Alloc* add_alloc(const uint64_t alloc_time, const addr_t addr, const uint
 		fprintf(stderr, "Warning: Duplicate allocation address: 0x%llx detected. Something is very wrong...\n", addr);
 		typename alloc_map_t::auto_type old = known_allocs.replace(existing, alloc);
 
+		if (old) {
+			count_delta = 0;
+			cost_delta -= old->size;
+		}
+
 	} else {
 
 		known_allocs.insert(addr, alloc);
@@ -195,16 +243,20 @@ static Alloc* add_alloc(const uint64_t alloc_time, const addr_t addr, const uint
 
 	latest_alloc_timestamp = alloc_time;
 
+	update_samples(alloc_time, count_delta, cost_delta);
+
 	return raw;
 }
 
-static bool delete_alloc(const addr_t addr) {
+static bool delete_alloc(const uint64_t dealloc_time, const addr_t addr) {
 
 	alloc_map_t::iterator found_at = known_allocs.find(addr);
 
 	if (found_at != known_allocs.end()) {
 
 		known_allocs.erase(found_at);
+
+		update_samples(dealloc_time, -1, (0-found_at->second->size));
 
 		return true;
 	}
@@ -457,7 +509,7 @@ static int read_dealloc() {
 
 	//fprintf(stderr, "read_dealloc() 0x%llx\n", addr);
 
-	if ( ! delete_alloc(addr) ) {
+	if ( ! delete_alloc((dealloc_time-start_time), addr) ) {
 		fprintf(stderr, "Cannot record deletion. Failed to find alloc with addr: 0x%llx\n", addr);
 	}
 
@@ -727,6 +779,37 @@ int generate_unresolved_symbol_report (const std::string& file_name) {
 }
 
 
+int generate_sample_file (const std::string& file_name, const std::vector<Sample>& samples, const uint32_t sample_interval_secs) {
+
+	FILE* file = fopen(file_name.c_str(), "w+");
+
+	fprintf(file, "# Runtime\tAlloc Count\tTotal Bytes\n");
+
+	const Sample* prev_sample = &samples[0];
+
+	BOOST_FOREACH(const Sample& sample, samples) {
+
+		// We don't keep a sample entry for each interval, just the intervals that had some
+		// activity. But when plotting a graph, we don't want sudden jumps, so fabricate the
+		// missing intervals.
+		uint64_t sample_time = prev_sample->sample_time;
+
+		while (sample.sample_time-sample_time > sample_interval_secs) {
+			fprintf(file, "%llu\t%llu\t%llu\n", sample_time, prev_sample->alloc_count, prev_sample->total_cost);
+
+			sample_time += sample_interval_secs;
+		}
+
+		fprintf(file, "%llu\t%llu\t%llu\n", sample.sample_time, sample.alloc_count, sample.total_cost);
+
+		prev_sample = &sample;
+	}
+
+	fclose(file);
+
+	return 0;
+}
+
 void signal_handler(int sig) {
 
 	keep_reading = false;
@@ -776,9 +859,13 @@ int main(int argc, const char* argv[]) {
 	desc.add_options()
 		("help", "show help message")
 		("rootfs", "path to the rootfs of the device")
-		("time-slice-interval-secs", po::value<uint32_t>(), 
+		("time-slice-interval-secs", po::value<uint32_t>(),
 		"chop-up the total runtime into a number of slices and generate a separate "
-		"callgrind file for each, detailing only the allocations made in that period");
+		"callgrind file for each, detailing only the allocations made in that period")
+		("sample-interval-secs", po::value<uint32_t>(),
+		"sample the total active allocations periodically, and generate an output file "
+		"suitable for plotting. Use this if you want to generate a historical view of "
+		"allocations over time");
 
 	po::variables_map vm;
 	po::positional_options_description p;
@@ -803,6 +890,12 @@ int main(int argc, const char* argv[]) {
 		time_slice_interval_secs = vm["time-slice-interval-secs"].as<uint32_t>();
 	}
 
+	if (vm.count("sample-interval-secs")) {
+		sample_interval_secs = vm["sample-interval-secs"].as<uint32_t>();
+		samples.push_back(Sample());
+		samples.push_back(Sample());
+	}
+
 	fprintf(stderr, "Rootfs: %s\n", rootfs_dir.c_str());
 
 	init_bfd();
@@ -813,6 +906,20 @@ int main(int argc, const char* argv[]) {
 	fprintf(stderr, "Entering read loop...\n");
 
 	start_reading();
+
+	if (samples.size()) {
+
+		samples.back().sample_time = latest_alloc_timestamp;
+
+		std::string sample_file;
+		if (remote_pid) {
+			sample_file = remote_program + "." + boost::lexical_cast<std::string>(remote_pid) + ".samples";
+		} else {
+			sample_file = "unknown.samples";
+		}
+
+		generate_sample_file(sample_file, samples, sample_interval_secs);
+	}
 
 	generate_callgrind_output_files(time_slice_interval_secs);
 
