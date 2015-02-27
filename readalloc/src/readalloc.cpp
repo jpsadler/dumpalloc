@@ -202,16 +202,19 @@ void apply_alloc_costs(const uint64_t starting_timestamp, const uint64_t ending_
 
 static void update_samples(const uint64_t time_offset, const int32_t count_delta, const int32_t cost_delta) {
 
-	// First thing: let's work-out whether we need to create a new sample.
-	Sample& current_sample = samples.back();
+	if (sample_interval_secs) {
 
-	if ((time_offset - current_sample.sample_time) > sample_interval_secs) {
-		const uint64_t new_sample_time = (time_offset / sample_interval_secs) * sample_interval_secs;
-		current_sample.sample_time = new_sample_time;
-		samples.push_back(Sample(new_sample_time, current_sample.alloc_count+count_delta, current_sample.total_cost+cost_delta));
-	} else {
-		current_sample.alloc_count += count_delta;
-		current_sample.total_cost += cost_delta;
+		// First thing: let's work-out whether we need to create a new sample.
+		Sample& current_sample = samples.back();
+
+		if ((time_offset - current_sample.sample_time) > sample_interval_secs) {
+			const uint64_t new_sample_time = (time_offset / sample_interval_secs) * sample_interval_secs;
+			current_sample.sample_time = new_sample_time;
+			samples.push_back(Sample(new_sample_time, current_sample.alloc_count+count_delta, current_sample.total_cost+cost_delta));
+		} else {
+			current_sample.alloc_count += count_delta;
+			current_sample.total_cost += cost_delta;
+		}
 	}
 }
 
