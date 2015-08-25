@@ -620,6 +620,24 @@ static void get_executable_name(char* buffer, size_t buffer_len) {
 	TRACE_MSG("get_executable_name() resolved to: %s\n", buffer);
 }
 
+static void resolve_pyobject_malloc() {
+
+	TRACE_MSG("looking for PyObject_Malloc()...\n");
+
+	real_PyObject_Malloc = (PyObject_Malloc_fn)dlsym(RTLD_NEXT, "PyObject_Malloc");
+
+	if (!real_PyObject_Malloc) {
+
+		INFO_MSG("Didn't find PyObject_Malloc(). OK, probably not running with Python.\n");
+	}
+
+	real_PyObject_Free = (PyObject_Free_fn)dlsym(RTLD_NEXT, "PyObject_Free");
+
+	if (!real_PyObject_Free) {
+
+		INFO_MSG("Didn't find PyObject_Free(). OK, probably not running with Python.\n");
+	}
+}
 
 //__attribute__((constructor(1000)))
 static void init() {
@@ -676,23 +694,6 @@ static void init() {
 	if (!real_realloc) {
 		ERROR_MSG("Failed to find real realloc!\n");
 		exit(1);
-	}
-
-
-	TRACE_MSG("looking for PyObject_Malloc()...\n");
-
-	real_PyObject_Malloc = (PyObject_Malloc_fn)dlsym(RTLD_NEXT, "PyObject_Malloc");
-
-	if (!real_PyObject_Malloc) {
-
-		INFO_MSG("Didn't find PyObject_Malloc(). OK, probably not running with Python.\n");
-	}
-
-	real_PyObject_Free = (PyObject_Free_fn)dlsym(RTLD_NEXT, "PyObject_Free");
-
-	if (!real_PyObject_Free) {
-
-		INFO_MSG("Didn't find PyObject_Free(). OK, probably not running with Python.\n");
 	}
 
 	TRACE_MSG("looking-up address of own malloc()...\n");
@@ -961,6 +962,11 @@ void* PyObject_Malloc(size_t size) {
 
 	TRACE_MSG("PyObject_Malloc(%zd)\n", size);
 
+	if ( ! real_PyObject_Malloc ) {
+		// FIXME: thread-safety!
+		resolve_pyobject_malloc();
+	}
+
 	if ( ! writer ) {
 		return real_PyObject_Malloc(size);
 	}
@@ -999,6 +1005,11 @@ void PyObject_Free(void* ptr) {
 	if ( ! ptr) return;
 
 	INIT_ONCE;
+
+	if ( ! real_PyObject_Free ) {
+		// FIXME: thread-safety!
+		resolve_pyobject_malloc();
+	}
 
 	if ( ! writer ) {
 		return real_PyObject_Free(ptr);
