@@ -28,7 +28,8 @@ static const int32_t record_type_dealloc = 2;
 static const int32_t record_type_object = 3;
 
 typedef uint64_t addr_t;
-static const uint64_t addr_t_max = 0xFFFFFFFFFFFFFFFF;
+
+static const uint64_t addr_t_max = UINT64_MAX;
 
 
 #endif // DUMPALLOC_DEFS_H

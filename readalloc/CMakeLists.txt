@@ -32,7 +32,7 @@ ExternalProject_Add(
 
 ExternalProject_Get_Property( binutils-2.24 install_dir )
 
-set( CMAKE_CXX_FLAGS " -I${install_dir}/include ${CMAKE_CXX_FLAGS} -D_GNU_SOURCE=1 -O3 -fvisibility=hidden -fPIC -pthread " )
+set( CMAKE_CXX_FLAGS " -I${install_dir}/include ${CMAKE_CXX_FLAGS} -D_GNU_SOURCE=1 -D__STDC_LIMIT_MACROS=1 -O3 -fvisibility=hidden -fPIC -pthread " )
 
 set( CMAKE_EXE_LINKER_FLAGS " -L${install_dir}/lib -Wl,-as-needed " )
 
