@@ -350,13 +350,13 @@ static int read_header() {
 
 		size_t space_at = remote_command.find_first_of(" ");
 
-		if (space_at == remote_command.npos) space_at = 0 ;
+		if (space_at == remote_command.npos) space_at = remote_command.length();
 
 		size_t last_slash_at = remote_command.find_last_of("/", space_at);
 
 		if (last_slash_at == remote_command.npos) last_slash_at = 0;
 
-		remote_program = remote_command.substr(last_slash_at+1, space_at);
+		remote_program = remote_command.substr(last_slash_at+1, (space_at-last_slash_at-1));
 	} else {
 		remote_program = "unknown";
 	}
