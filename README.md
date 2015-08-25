@@ -19,11 +19,18 @@ Like many other `malloc` debuggers, it works by interposing `malloc()`, `realloc
 Additionally, it generates a stacktrace for each allocation/deallocation, which 
 is then either logged to a file, or to a remote process, via a TCP socket. 
 
-The stacktrace is generated using instruction-scanning with a termination
-heuristic. This is an inherently processor-specific technique, and is the reason
-that `libdumpalloc` currently only works on MIPS. However, an advantage of this
-technique is that it works quite well with release builds, and doesn't require
-unwind tables (as would be required by libunwind).
+By default `libdumpalloc` uses GCC intrinsic unwind support. However, on MIPS
+platforms, an alternative unwinder is available which uses instruction-scanning
+with a termination heuristic. This is an inherently processor-specific technique,
+and is only available for MIPS. However, an advantage of this technique is that
+it works quite well with release builds, and doesn't require unwind tables.
+
+To enable this alternative unwinder set the environment variable:
+
+	DUMPALLOC_WALK_STACK=1
+
+prior to LD_PRELOADING `libdumpalloc.so`
+
 
 ## readalloc
 

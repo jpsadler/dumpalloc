@@ -49,7 +49,6 @@
 #define INFO_MSG(...)  fprintf(stderr, "libdumpalloc [INFO] : "__VA_ARGS__); fflush(stderr);
 #define ERROR_MSG(...) fprintf(stderr, "libdumpalloc [ERROR]: "__VA_ARGS__); fflush(stderr);
 
-
 static walk_python_stack_fn walk_python_stack = NULL;
 
 typedef void* (*malloc_fn)(size_t);
@@ -86,6 +85,8 @@ static uint32_t inited = 0;
 
 static __thread size_t malloc_depth = 0;
 static pthread_mutex_t mutex = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
+
+static int use_walk_stack = 0;
 
 typedef struct {
 	const void* start;
@@ -568,8 +569,12 @@ static void dump_alloc(void* addr, size_t size) {
 
 	size_t num_frames = 0;
 
-	//walk_stack(&dump_frame, &get_backward_scan_earliest_addr, &num_frames);
-	_Unwind_Backtrace(&dump_unwind_frame, &num_frames);
+	if (use_walk_stack) {
+		walk_stack(&dump_frame, &get_backward_scan_earliest_addr, &num_frames);
+	} else {
+		fprintf(stderr, "Unwind...\n");
+		_Unwind_Backtrace(&dump_unwind_frame, &num_frames);
+	}
 
 	if (walk_python_stack) {
 		write_addr(writer, (void*)1U);
@@ -624,6 +629,16 @@ static void init() {
 	TRACE_MSG("init()\n");
 
 	++malloc_depth;
+
+	if (getenv("DUMPALLOC_WALK_STACK")) {
+
+		if (have_walk_stack) {
+			use_walk_stack = 1;
+		} else {
+			ERROR_MSG("Ignoring `DUMPALLOC_WALK_STACK`. Instr-scanning not supported "
+				"for this platform. Will use unwind instead.\n");
+		}
+	}
 
 	TRACE_MSG("looking for calloc()...\n");
 
