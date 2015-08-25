@@ -874,8 +874,13 @@ int main(int argc, const char* argv[]) {
 	po::positional_options_description p;
 	p.add("rootfs", -1);
 
-	po::store(po::command_line_parser(argc, argv).options(desc).positional(p).run(), vm);
-	po::notify(vm);
+	try {
+		po::store(po::command_line_parser(argc, argv).options(desc).positional(p).run(), vm);
+		po::notify(vm);
+	} catch (...) {
+		std::cerr << desc << "\n";
+		return 1;
+	}
 
 	if (vm.count("help")) {
 		std::cerr << desc << "\n";
