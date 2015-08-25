@@ -738,10 +738,11 @@ void generate_callgrind_output_files(const uint32_t slice_interval_secs) {
 
 	std::string callgrind_file = base_callgrind_filename;
 
+	apply_alloc_costs(0, latest_alloc_timestamp+1);
+
 	fprintf(stderr, "Number of active allocations: %llu, total cost: %llu, number of ELF objects: %lu\n",
 		active_alloc_count, active_alloc_total_cost, known_objects.size());
 
-	apply_alloc_costs(0, latest_alloc_timestamp+1);
 
 	fprintf(stderr, "Generating full callgrind file: %s\n", callgrind_file.c_str());
 
