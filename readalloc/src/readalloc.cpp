@@ -344,12 +344,22 @@ static int read_header() {
 		return 1;
 	}
 
-	size_t space_at = remote_command.find_first_of(" ");
-	size_t last_slash_at = remote_command.find_last_of("/", space_at);
 
-	if (last_slash_at == remote_command.npos) last_slash_at = 0;
 
-	remote_program = remote_command.substr(last_slash_at+1, space_at);
+	if (remote_command.size()) {
+
+		size_t space_at = remote_command.find_first_of(" ");
+
+		if (space_at == remote_command.npos) space_at = 0 ;
+
+		size_t last_slash_at = remote_command.find_last_of("/", space_at);
+
+		if (last_slash_at == remote_command.npos) last_slash_at = 0;
+
+		remote_program = remote_command.substr(last_slash_at+1, space_at);
+	} else {
+		remote_program = "unknown";
+	}
 
 	return 0;
 }
