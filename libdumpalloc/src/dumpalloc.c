@@ -651,6 +651,7 @@ static void init() {
 	if (getenv("DUMPALLOC_WALK_STACK")) {
 
 		if (have_walk_stack) {
+			INFO_MSG("I'm going to use MIPS-specific instr-scanning for unwinding stack.\n");
 			use_walk_stack = 1;
 		} else {
 			ERROR_MSG("Ignoring `DUMPALLOC_WALK_STACK`. Instr-scanning not supported "
