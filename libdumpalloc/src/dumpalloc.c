@@ -572,7 +572,6 @@ static void dump_alloc(void* addr, size_t size) {
 	if (use_walk_stack) {
 		walk_stack(&dump_frame, &get_backward_scan_earliest_addr, &num_frames);
 	} else {
-		fprintf(stderr, "Unwind...\n");
 		_Unwind_Backtrace(&dump_unwind_frame, &num_frames);
 	}
 
