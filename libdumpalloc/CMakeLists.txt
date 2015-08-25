@@ -22,7 +22,8 @@ project ( DUMPALLOC )
 
 find_package(PythonLibs)
 
-set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_GNU_SOURCE=1 -O2 -fvisibility=hidden -ftls-model=initial-exec -fPIC -pthread -fasynchronous-unwind-tables" )
+set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_GNU_SOURCE=1 -O3 -fno-reorder-blocks -fvisibility=hidden -ftls-model=initial-exec -fPIC -pthread -fasynchronous-unwind-tables" )
+
 set( CMAKE_SHARED_LINKER_FLAGS $ENV{LDFLAGS} "-pthread -Wl,-no-as-needed -shared -lrt -ldl" )
 add_library ( dumpalloc SHARED src/dumpalloc.c )
 
