@@ -65,6 +65,10 @@ static calloc_fn real_calloc = NULL;
 
 typedef void* (*realloc_fn)(void*, size_t);
 
+typedef void* (*memalign_fn)(size_t, size_t);
+
+static memalign_fn real_memalign = NULL;
+
 static realloc_fn real_realloc = NULL;
 
 typedef void* (*dlopen_fn)(const char*, int);
@@ -696,6 +700,13 @@ static void init() {
 		exit(1);
 	}
 
+	real_memalign = (memalign_fn)dlsym(RTLD_NEXT, "memalign");
+
+	if (!real_memalign) {
+		ERROR_MSG("Failed to find real memalign! %s\n", dlerror());
+		exit(1);
+	}
+
 	TRACE_MSG("looking-up address of own malloc()...\n");
 
 	sym_info_t malloc_sym_info;
@@ -951,6 +962,22 @@ void* realloc(void* ptr, size_t size) {
 
 	--malloc_depth;
 	
+	return addr;
+}
+
+__attribute__((visibility("default")))
+__attribute__((noinline))
+void * memalign(size_t boundary, size_t size)
+{
+	if( !writer ) {
+		return real_memalign(boundary, size);
+	}
+
+	//this calls malloc, but we need to intercept it for lock reasons
+	pthread_mutex_lock(&mutex);
+	void* addr = real_memalign(boundary, size);
+	pthread_mutex_unlock(&mutex);
+
 	return addr;
 }
 
