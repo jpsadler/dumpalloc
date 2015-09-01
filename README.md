@@ -138,7 +138,7 @@ First, on the PC, launch `readalloc` on the PC. Since we want `libdumpalloc`
 to send the captured data directly to `readalloc` we need a listening socket, so
 we do this:
 
-		nc -l 7000 | readalloc /path/to/device/rootfs
+		nc -lp 7000 | readalloc /path/to/device/rootfs
 
 `readalloc` itself doesn't listen on a socket. We instead are using `netcat` (`nc`)
 to do this for us. `readalloc` then just reads from `stdin`. In this example
