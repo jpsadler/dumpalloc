@@ -42,7 +42,12 @@
 #include <link.h>			/* for dl_iterate_phdr() */
 #include <time.h>
 
+#ifdef HAVE_LIBUNWIND
+#define UNW_LOCAL_ONLY
+#include <libunwind.h>
+#else
 #include <unwind.h>
+#endif
 
 //#define TRACE_MSG(...) fprintf(stderr, "libdumpalloc [TRACE]: "__VA_ARGS__); fflush(stderr);
 #define TRACE_MSG(...)
@@ -539,7 +544,47 @@ static int dump_python_frame(const char* function, const char* source_file, cons
 	return 1;
 }
 
+#ifdef HAVE_LIBUNWIND
+static void unwind_with_libunwind()
+{
+	unw_cursor_t cursor;
+	unw_context_t uc;
 
+	unw_getcontext(&uc);
+  	unw_init_local(&cursor, &uc);
+
+  	unw_word_t lip ,lsp;
+	void* earliest = NULL;
+	unw_word_t ip ,sp;
+
+	lsp = 0; lip = 0;
+
+  	while (unw_step(&cursor) > 0) {
+  		
+  		lip = ip;
+		lsp = sp;
+  		
+  		unw_get_reg(&cursor, UNW_REG_IP, &ip);
+  		unw_get_reg(&cursor, UNW_REG_SP, &sp);
+
+  		void* ra = (void*)ip;
+  		earliest = get_backward_scan_earliest_addr(ra);
+
+  		
+  		
+  		TRACE_MSG("Frame: 0x%llx\n", (uint64_t)ip);
+
+  		// Skip calls to our internal fns. Don't want these showing-up in callstack.
+  		if (ra >= dumpalloc_seg_start && ra < dumpalloc_seg_end) {
+			TRACE_MSG("Discarding frame: 0x%llx\n", ra);
+			continue;
+		}
+
+		write_addr(writer, ra);
+
+  	}
+}
+#else 
 _Unwind_Reason_Code dump_unwind_frame(struct _Unwind_Context* ctx, void* user_data) {
 
 	size_t* num_frames = (size_t*)user_data;
@@ -561,6 +606,7 @@ _Unwind_Reason_Code dump_unwind_frame(struct _Unwind_Context* ctx, void* user_da
 
 	return _URC_NO_REASON;
 }
+#endif
 
 static void dump_alloc(void* addr, size_t size) {
 
@@ -576,7 +622,11 @@ static void dump_alloc(void* addr, size_t size) {
 	if (use_walk_stack) {
 		walk_stack(&dump_frame, &get_backward_scan_earliest_addr, &num_frames);
 	} else {
+		#ifdef HAVE_LIBUNWIND
+		unwind_with_libunwind();
+		#else
 		_Unwind_Backtrace(&dump_unwind_frame, &num_frames);
+		#endif
 	}
 
 	if (walk_python_stack) {
