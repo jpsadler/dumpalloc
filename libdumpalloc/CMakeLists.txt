@@ -22,6 +22,14 @@ project ( DUMPALLOC )
 
 find_package(PythonLibs)
 
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_SOURCE_DIR}/cmake)
+find_package(libUnwind)
+
+if(libUnwind_FOUND)
+add_definitions(-DHAVE_LIBUNWIND)
+include_directories(${libUnwind_INCLUDE_DIRS})
+endif()
+
 set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_GNU_SOURCE=1 -O3 -fno-reorder-blocks -fvisibility=hidden -ftls-model=initial-exec -fPIC -pthread -fasynchronous-unwind-tables" )
 
 set( CMAKE_SHARED_LINKER_FLAGS $ENV{LDFLAGS} "-pthread -Wl,-no-as-needed -shared -lrt -ldl" )
@@ -36,7 +44,11 @@ target_link_libraries ( dumpalloc-python "${PYTHON_LIBRARIES}" )
 target_include_directories ( dumpalloc-python PRIVATE "${PYTHON_INCLUDE_DIRS}" )
 endif()
 
-add_subdirectory ( manual-test-programs )
+if(libUnwind_FOUND)
+target_link_libraries ( dumpalloc ${libUnwind_LIBRARIES})
+endif()
+
+#add_subdirectory ( manual-test-programs )
 
 if (CMAKE_CROSSCOMPILING)
 else()
