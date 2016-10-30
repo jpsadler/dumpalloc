@@ -36,7 +36,7 @@ target_link_libraries ( dumpalloc-python "${PYTHON_LIBRARIES}" )
 target_include_directories ( dumpalloc-python PRIVATE "${PYTHON_INCLUDE_DIRS}" )
 endif()
 
-add_subdirectory ( manual-test-programs )
+#add_subdirectory ( manual-test-programs )
 
 if (CMAKE_CROSSCOMPILING)
 else()
