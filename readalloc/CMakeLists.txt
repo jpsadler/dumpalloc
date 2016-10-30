@@ -20,19 +20,54 @@
 cmake_minimum_required ( VERSION 2.6 ) 
 project ( READALLOC )
 
-find_package(Boost)
+find_package(Boost REQUIRED COMPONENTS program_options)
+include_directories(${Boost_INCLUDE_DIRS})
 
 include(ExternalProject)
 ExternalProject_Add(
 	binutils-2.24
 	URL http://ftp.gnu.org/gnu/binutils/binutils-2.24.tar.gz
+    PATCH_COMMAND patch -p1 < ${CMAKE_CURRENT_SOURCE_DIR}/fix-libiberty-install.patch
 	CONFIGURE_COMMAND <SOURCE_DIR>/bfd/configure --enable-targets=mipsel --disable-nls --prefix=<INSTALL_DIR>
 	INSTALL_DIR "bfd"
 )
 
+#now also build libiberty from the same sources
+ExternalProject_Add_Step(
+    binutils-2.24
+    libiberty-mkdir
+    COMMAND mkdir -p libiberty_build
+    DEPENDEES install
+)
+
+ExternalProject_Add_Step(
+    binutils-2.24
+    libiberty-configure
+    COMMAND <SOURCE_DIR>/libiberty/configure --prefix=<INSTALL_DIR> --enable-install-libiberty
+    DEPENDEES libiberty-mkdir
+    WORKING_DIRECTORY libiberty_build
+)
+
+ExternalProject_Add_Step(
+    binutils-2.24
+    libiberty-make
+    COMMAND ${CMAKE_MAKE_PROGRAM}
+    DEPENDEES libiberty-configure
+    WORKING_DIRECTORY libiberty_build
+)
+
+ExternalProject_Add_Step(
+    binutils-2.24
+    libiberty-install
+    COMMAND ${CMAKE_MAKE_PROGRAM} install
+    DEPENDEES libiberty-make
+    WORKING_DIRECTORY libiberty_build
+)
+
 ExternalProject_Get_Property( binutils-2.24 install_dir )
 
-set( CMAKE_CXX_FLAGS " -I${install_dir}/include ${CMAKE_CXX_FLAGS} -D_GNU_SOURCE=1 -D__STDC_LIMIT_MACROS=1 -O3 -fvisibility=hidden -fPIC -pthread " )
+include_directories("${install_dir}/include" "${install_dir}/include/libiberty")
+set( CMAKE_CXX_FLAGS " ${CMAKE_CXX_FLAGS} -D_GNU_SOURCE=1 -D__STDC_LIMIT_MACROS=1 -O3 -fvisibility=hidden -fPIC -pthread " )
 
 set( CMAKE_EXE_LINKER_FLAGS " -L${install_dir}/lib -Wl,-as-needed " )
 
